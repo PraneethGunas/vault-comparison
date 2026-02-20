@@ -1,0 +1,23 @@
+[project]
+name = "vault-comparison"
+version = "0.1.0"
+description = "Comparative analysis framework for Bitcoin covenant vault designs"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+ctv = [
+    "python-bitcoinlib",
+    "clii",
+    "buidl @ git+https://github.com/buidl-bitcoin/buidl-python.git",
+]
+ccv = [
+    "python-dotenv",
+    "prompt-toolkit",
+]
+
+[tool.setuptools.packages.find]
+include = ["harness*", "adapters*", "experiments*"]
+
+[project.scripts]
+vault-compare = "run:main"
