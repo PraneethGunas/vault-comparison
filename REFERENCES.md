@@ -97,18 +97,36 @@ The revault splitting attack originates with halseth in the OP_VAULT discussion,
 
 ### J. fee_sensitivity
 
-Individual attack costs at specific fee rates appear in various discussions of the above works. This experiment synthesizes structural vsize measurements from all experiments and projects them across six historical fee environments (1–500 sat/vB), comparing how each threat model's rationality condition shifts with fee rate.
+Individual attack costs at specific fee rates appear in various discussions of the above works. This experiment synthesizes structural vsize measurements from all experiments and projects them across six historical fee environments (1–500 sat/vB), comparing how each threat model's rationality condition shifts with fee rate. The fee-dependent inversion of security rankings (finding #4) is, to our knowledge, a novel empirical finding — prior analyses compared designs at single fee points, masking the crossover.
+
+### K. opvault_recovery_auth
+
+The authorized recovery mechanism is specified in [BIP-345](https://bips.dev/345/) §Recovery and analyzed by O'Beirne in the context of anti-griefing design. The recoveryauth key requirement was O'Beirne's explicit response to the keyless recovery griefing problem identified by Ingala [Ing23]. This experiment quantifies the authorized recovery cost (246 vB, measured), simulates recoveryauth-keyed griefing, and compares with CCV's keyless griefing surface. The key-loss risk observation (recoveryauth loss = permanent inability to recover) follows from the design but is not highlighted in [OS23] — we make it explicit as the cost of the anti-griefing property.
+
+### L. opvault_trigger_key_theft
+
+Trigger key compromise is the standard adversary model for vault security, analyzed in [SHMB20] and [OS23]. OP_VAULT-specific aspects: the xpub-derived trigger key hierarchy ([BIP-345](https://bips.dev/345/) §Key management), CTV-locked trigger output (shared with CTV), and three-key separation (trigger, recoveryauth, recovery). The dual-key compromise analysis (trigger + recoveryauth = persistent liveness denial, NOT theft) follows from the pre-committed recovery address design in BIP-345 — recovery always sends to the address fixed at vault creation. This is structurally less severe than CTV's hot+fee dual-key compromise (which enables actual fund theft via fee-pinning bypass).
 
 ---
 
 ## 3. Contribution Summary
 
-This work provides an empirical comparison framework for CTV ([BIP-119](https://bips.dev/119/)) and CCV ([BIP-443](https://bips.dev/443/)) vault designs. The threat models and attack vectors tested here originate from the works cited above. The framework contributes:
+This work provides an empirical comparison framework for CTV ([BIP-119](https://bips.dev/119/)), CCV ([BIP-443](https://bips.dev/443/)), and OP_VAULT ([BIP-345](https://bips.dev/345/)) vault designs. The threat models and attack vectors tested here originate from the works cited above — the conceptual contribution is measurement and cross-design synthesis, not vulnerability discovery. See `context.md` §1.1 for the full novelty statement.
 
-1. Regtest-measured transaction sizes for both vault designs under a uniform adapter interface, providing concrete vsize baselines where prior analysis used estimates or left sizes unspecified.
+**What prior work established (we quantify, not discover):**
 
-2. Empirical demonstrations of attack vectors previously discussed in theoretical or design-review contexts — descendant-chain pinning against CTV anchors, OP_SUCCESS exploitation of undefined CCV flags, address reuse failure modes, and the cross-input DEDUCT accounting failure.
+- Vault lifecycle model, threat vocabulary, static-vs-dynamic vault distinction: Swambo et al. [SHMB20]
+- Keyless recovery griefing as inherent CCV property: Ingala [Ing23]
+- Fee pinning via descendant chains, TRUC/v3 mitigation: Zhao, Bitcoin Core PRs #28948/#29496
+- Authorized recovery tradeoff, watchtower fee exhaustion estimates: O'Beirne/Sanders [OS23], Harding [Har24]
+- CCV mode confusion with undefined OP_SUCCESS flags: Ingala [Ing23]
 
-3. Parameterized economic models for watchtower exhaustion, recovery griefing, and fee pinning that project costs across historical fee environments, extending Harding's [Har24](https://delvingbitcoin.org/t/op-vault-comments/521) watchtower analysis with variable withdrawal fractions, batched recovery quantification, and spend-delay sensitivity.
+**What the framework contributes:**
 
-4. A cross-attack fee sensitivity synthesis showing that CTV and CCV exhibit complementary vulnerability profiles: CTV's worst-case failure (fee pinning combined with hot-key compromise) is fee-invariant, while CCV's worst-case failure (watchtower exhaustion) becomes more viable at higher fee rates.
+1. The first three-way empirical comparison — regtest-measured transaction sizes for CTV, CCV, and OP_VAULT (12 experiments, 7 structured threat models, TM1–TM7) under a uniform adapter interface. OP_VAULT measurements revealed the fee-input overhead (all non-deposit txs +80–90 vB vs estimates), correcting prior hand-estimates.
+
+2. Fee-dependent inversion of security rankings — the cross-experiment fee sensitivity synthesis (experiment J) shows that the relative security ordering of vault designs flips depending on fee environment. In low-fee regimes, CCV/OP_VAULT are safer (splitting is infeasible); in high-fee regimes, watchtower exhaustion becomes feasible while CTV's fee pinning cost remains negligible. No prior analysis has demonstrated this crossover.
+
+3. The inverse-ranking structural result — griefing resistance and fund safety under key loss are necessarily anti-correlated across designs (OP_VAULT > CTV > CCV for griefing resistance; CCV > CTV > OP_VAULT for key-loss safety). This is a necessary tradeoff, not an implementation artifact.
+
+4. Empirical confirmation/correction of prior estimates — Harding's [Har24] ~3,000 chunks/block estimate confirmed (measured: 3,427). OP_VAULT hand-estimated vsizes corrected (trigger: 200→292, recovery: 170→246). Parameterized economic models extending [Har24] with variable withdrawal fractions, batched recovery quantification, and spend-delay sensitivity.

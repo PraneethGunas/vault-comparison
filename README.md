@@ -4,7 +4,9 @@ Comparative analysis framework for CTV (BIP-119), CCV (BIP-443), and OP_VAULT (B
 
 ## Overview
 
-This framework runs side-by-side experiments against covenant vault implementations, measuring transaction costs, security properties, and capability differences.
+This framework runs side-by-side experiments against three covenant vault implementations, measuring transaction costs, security properties, and capability differences. Each experiment produces on-chain measurements from regtest, not simulated or estimated values.
+
+The three covenant proposals represent fundamentally different design philosophies for Bitcoin vaults: CTV commits to exact transaction templates at vault creation; CCV enforces contract rules dynamically at spend time; OP_VAULT provides purpose-built vault opcodes with authorized recovery and dynamic withdrawal targets.
 
 ## Repository Layout
 
@@ -19,7 +21,7 @@ research experiments/
 │   ├── run.py                # CLI runner
 │   ├── harness/              # Shared infra (RPC, metrics, reporting)
 │   ├── adapters/             # Vault drivers (CTV, CCV, OP_VAULT)
-│   ├── experiments/          # Experiment modules
+│   ├── experiments/          # Experiment modules (12 experiments)
 │   └── results/              # Timestamped output (gitignored)
 ├── simple-ctv-vault/         # CTV vault (upstream clone)
 ├── pymatt/                   # CCV vault (upstream clone)
@@ -44,15 +46,22 @@ cd vault-comparison
 uv pip install -e ".[ctv,ccv]"
 ```
 
+For OP_VAULT, install its dependencies separately:
+
+```bash
+cd simple-op-vault
+pip install -r requirements.txt
+```
+
 ## Node Requirements
 
 Each adapter requires a specific Bitcoin node variant:
 
 - **CTV:** Bitcoin Inquisition (`./switch-node.sh inquisition`)
-- **CCV:** Merkleize Bitcoin (`./switch-node.sh ccv`)
+- **CCV:** Merkleize Bitcoin with CCV support (`./switch-node.sh ccv`)
 - **OP_VAULT:** jamesob/bitcoin opvault branch (`./switch-node.sh opvault`)
 
-See `setup-context.md` for build instructions.
+Switching nodes wipes regtest state. See `setup-context.md` for build instructions and binary paths.
 
 ## Usage
 
@@ -64,15 +73,16 @@ cd vault-comparison
 # List available experiments
 uv run run.py list
 
-# Run an experiment (auto-switches to correct node)
+# Run an experiment on a specific covenant
 uv run run.py run lifecycle_costs --covenant ctv
 uv run run.py run lifecycle_costs --covenant ccv
+uv run run.py run lifecycle_costs --covenant opvault
 
-# Run on both covenants
-uv run run.py run lifecycle_costs --covenant both
+# Run on all three covenants (CTV → CCV → OP_VAULT)
+uv run run.py run lifecycle_costs --covenant all
 
-# Run all core experiments on both
-uv run run.py run --tag core --covenant both
+# Run all core experiments across all covenants
+uv run run.py run --tag core --covenant all
 
 # Skip node switching (node already running)
 uv run run.py run lifecycle_costs --covenant ctv --no-switch
@@ -83,67 +93,93 @@ uv run run.py compare results/<timestamp_directory>
 
 ## Experiments
 
+The framework includes 12 experiments organized by scope category.
+
 ### Category Taxonomy
 
-Not all experiments are head-to-head comparisons. They fall into three scope categories:
+- **Comparative** — Same test across covenants; finding comes from the difference
+- **Capability gap** — Feature that some covenants support and others cannot
+- **Covenant-specific** — Tests semantics unique to one covenant design
+- **Analytical** — Fee projections and sensitivity analysis (no node required)
 
-- **Comparative** — same test, both covenants, finding comes from the difference
-- **Capability gap** — CCV feature that CTV cannot do (CTV reports "unsupported")
-- **CCV-only** — CCV-specific semantics with no CTV analog
+### Experiment Catalog
 
-| Name | Category | Description |
-|------|----------|-------------|
-| lifecycle_costs | Comparative | Full vault lifecycle transaction sizes and fees |
-| address_reuse | Comparative | Second-deposit safety (stuck funds vs safe re-funding) |
-| fee_pinning | Comparative | Fee mechanism and descendant-chain pinning surface |
-| recovery_griefing | Comparative | Forced-recovery griefing: asymmetric cost analysis |
-| revault_amplification | Capability gap | Partial withdrawal chaining and cost accumulation |
-| multi_input | Capability gap | Batched trigger efficiency and cross-input accounting |
-| ccv_edge_cases | CCV-only | Mode confusion, keypath bypass, sentinel values |
-| watchtower_exhaustion | CCV-only | Revault-splitting watchtower fee exhaustion |
+| # | Name | Covenants | Category | Description |
+|---|------|-----------|----------|-------------|
+| A | `lifecycle_costs` | CTV, CCV, OPV | Comparative | Full vault lifecycle transaction sizes and fees |
+| B | `address_reuse` | CTV, CCV, OPV | Comparative | Second-deposit safety: stuck funds (CTV) vs safe re-funding (CCV, OPV) |
+| C | `fee_pinning` | CTV, CCV, OPV | Comparative | Fee mechanism and descendant-chain pinning surface |
+| D | `recovery_griefing` | CTV, CCV, OPV | Comparative | Forced-recovery griefing: three-way asymmetric cost analysis |
+| E | `revault_amplification` | CCV, OPV | Capability gap | Partial withdrawal chaining and cost accumulation |
+| F | `multi_input` | CTV, CCV, OPV | Capability gap | Batched trigger efficiency and cross-input accounting |
+| G | `ccv_edge_cases` | CCV | CCV-only | Mode confusion, keypath bypass, sentinel values |
+| H | `watchtower_exhaustion` | CCV, OPV | Security | Revault-splitting watchtower fee exhaustion attack |
+| I | `fee_sensitivity` | All (analytical) | Analytical | Three-way fee environment sensitivity projections |
+| J | `opvault_recovery_auth` | OPV | OP_VAULT-specific | Authorized recovery as defense and attack surface |
+| K | `opvault_trigger_key_theft` | OPV | OP_VAULT-specific | Trigger key theft: attacker vs watchtower recovery race |
+
+### Key Security Findings
+
+The three-way comparison reveals a distinct vulnerability profile for each covenant:
+
+**CTV** — Hot key compromise leads to fund theft (delayed by timelock). Fee pinning via anchor outputs. No revault means no splitting attacks. Address reuse causes permanent fund loss.
+
+**CCV** — Keyless recovery griefing (anyone can force-recover, lowest attacker bar). Watchtower fee exhaustion via revault splitting. No fee pinning (no anchor outputs). Safe address reuse.
+
+**OP_VAULT** — Authorized recovery blocks keyless griefing (requires recoveryauth key). Same revault-splitting vulnerability as CCV. Fee-input model eliminates pinning. Safe address reuse. Trigger key theft mitigated by watchtower + authorized recovery race.
 
 ### Running by Category
 
 ```bash
 cd vault-comparison
 
-# All comparative experiments on both covenants (auto-switches nodes)
-uv run run.py run --tag comparative --covenant both
+# All comparative experiments across covenants
+uv run run.py run --tag comparative --covenant all
 
-# Capability-gap experiments (CCV features CTV lacks)
-uv run run.py run --tag capability_gap --covenant ccv
+# Security-focused experiments
+uv run run.py run --tag security --covenant all
+
+# OP_VAULT-specific experiments
+uv run run.py run --tag opvault_specific --covenant opvault
+
+# Capability-gap experiments
+uv run run.py run --tag capability_gap --covenant all
 
 # CCV-only edge cases
 uv run run.py run --tag ccv_only --covenant ccv
 
-# Only experiments that collect cost metrics
-uv run run.py run --tag quantitative --covenant both
-
-# All security-focused experiments
-uv run run.py run --tag security --covenant both
+# Quantitative cost experiments
+uv run run.py run --tag quantitative --covenant all
 
 # Run everything
-uv run run.py run --all --covenant both
+uv run run.py run --all --covenant all
 ```
 
-### Standalone Fee Analysis
+## Adapter Capabilities
 
-The fee sensitivity analysis runs analytically (no Bitcoin node required):
+Each adapter exposes the vault lifecycle through a common interface. Some capabilities are covenant-specific:
 
-```bash
-cd vault-comparison
-python3 run_fee_analysis.py
-```
+| Capability | CTV | CCV | OP_VAULT |
+|-----------|-----|-----|----------|
+| `create_vault()` | Yes | Yes | Yes |
+| `trigger_unvault()` | Yes | Yes | Yes |
+| `complete_withdrawal()` | Yes | Yes | Yes |
+| `trigger_recovery()` | Yes | Yes | Yes (authorized) |
+| `trigger_revault()` | No | Yes | Yes |
+| `trigger_batched()` | No | Yes | Yes |
+| Address reuse safe | No | Yes | Yes |
+| Fee mechanism | Anchor output | No anchors | Fee input |
 
 ## Output Structure
 
 Results are saved to timestamped directories under `vault-comparison/results/`:
 
 ```
-results/2026-02-19_143000/
+results/2026-02-21_143000/
 ├── lifecycle_costs/
 │   ├── ctv.json          # Raw ExperimentResult
 │   ├── ccv.json
+│   ├── opvault.json
 │   ├── comparison.json   # Side-by-side data
 │   └── summary.md        # Markdown comparison table
 ├── multi_input/
@@ -153,8 +189,19 @@ results/2026-02-19_143000/
 └── ...
 ```
 
+## Memory Layer
+
+A SQLite-based research memory system tracks findings across sessions:
+
+```bash
+python memory/research_memory.py summary                    # Overall progress
+python memory/research_memory.py search "fee pinning"       # Full-text search
+python memory/research_memory.py list-attacks --covenant CTV
+python memory/research_memory.py list-questions --status open
+```
+
 ## Further Reading
 
 - `context.md` — Architecture, adapter pattern, threat model methodology, full experiment catalog with threat models, regtest limitations
-- `REFERENCES.md` — Prior art survey with per-experiment attribution to academic work
+- `REFERENCES.md` — Prior art survey with per-experiment attribution (BIPs 119, 345, 443; Swambo et al.; Harding's watchtower analysis)
 - `setup-context.md` — Node build instructions and environment setup

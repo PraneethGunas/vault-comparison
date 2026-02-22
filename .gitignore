@@ -6,6 +6,7 @@ bitcoin-inquisition/
 bitcoin-opvault/
 
 # === Agent / session files ===
+.claude/
 agent.md
 memory/
 vault-comparison/CLAUDE.md
