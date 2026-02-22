@@ -117,6 +117,7 @@ The framework includes 12 experiments organized by scope category.
 | I | `fee_sensitivity` | All (analytical) | Analytical | Three-way fee environment sensitivity projections |
 | J | `opvault_recovery_auth` | OPV | OP_VAULT-specific | Authorized recovery as defense and attack surface |
 | K | `opvault_trigger_key_theft` | OPV | OP_VAULT-specific | Trigger key theft: attacker vs watchtower recovery race |
+| M | `ccv_mode_bypass` | CCV | CCV-only | Production-shaped vault UTXO theft via OP_SUCCESS on undefined CCV modes |
 
 ### Key Security Findings
 
@@ -124,7 +125,7 @@ The three-way comparison reveals a distinct vulnerability profile for each coven
 
 **CTV** — Hot key compromise leads to fund theft (delayed by timelock). Fee pinning via anchor outputs. No revault means no splitting attacks. Address reuse causes permanent fund loss.
 
-**CCV** — Keyless recovery griefing (anyone can force-recover, lowest attacker bar). Watchtower fee exhaustion via revault splitting. No fee pinning (no anchor outputs). Safe address reuse.
+**CCV** — Keyless recovery griefing (anyone can force-recover, lowest attacker bar). Watchtower fee exhaustion via revault splitting. No fee pinning (no anchor outputs). Safe address reuse. **Critical: undefined CCV mode values (TM8) cause OP_SUCCESS — complete covenant bypass, full vault theft with no signature required.**
 
 **OP_VAULT** — Authorized recovery blocks keyless griefing (requires recoveryauth key). Same revault-splitting vulnerability as CCV. Fee-input model eliminates pinning. Safe address reuse. Trigger key theft mitigated by watchtower + authorized recovery race.
 

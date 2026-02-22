@@ -24,13 +24,14 @@ The vault lifecycle model and threat vocabulary follow Swambo et al. ([arXiv 200
 
 The conceptual contribution is a *unified measurement framework* that reveals how design-level tradeoffs compose under realistic fee environments. Specifically:
 
-1. **The first three-way empirical comparison.** Regtest-measured transaction sizes for CTV, CCV, and OP_VAULT under a uniform adapter interface (12 experiments, 7 threat models). Prior analysis compared at most two designs, or used estimates rather than measured values. The OP_VAULT vsize measurements reveal the fee-input overhead: all non-deposit transactions are 80–90 vB larger than expected (§4.2), making OP_VAULT's lifecycle 36% more expensive than CCV's.
+1. **The first three-way empirical comparison.** Regtest-measured transaction sizes for CTV, CCV, and OP_VAULT under a uniform adapter interface (12 experiments, 8 threat models). Prior analysis compared at most two designs, or used estimates rather than measured values. The OP_VAULT vsize measurements reveal the fee-input overhead: all non-deposit transactions are 80–90 vB larger than expected (§4.2), making OP_VAULT's lifecycle 36% more expensive than CCV's.
 
 2. **Fee-dependent inversion of security rankings.** The cross-experiment fee sensitivity synthesis (experiment J) shows that the *relative* security ordering of vault designs flips depending on fee environment. In low-fee regimes (1–10 sat/vB), CCV and OP_VAULT are safer than CTV (fee pinning is cheap but splitting is infeasible). In high-fee regimes (100–500 sat/vB), watchtower exhaustion becomes feasible against CCV/OP_VAULT while CTV's fee pinning cost remains negligible — the security ordering inverts. This fee-dependent crossover is the strongest finding: no prior analysis has shown that the answer to "which vault is safest?" depends on the fee environment.
 
 3. **The inverse-ranking structural result.** Griefing resistance and fund safety under key loss are anti-correlated across all three designs: OP_VAULT > CTV > CCV for griefing resistance, CCV > CTV > OP_VAULT for key-loss safety. This is a necessary tradeoff (not an implementation artifact): blocking unauthorized recovery *requires* a key whose loss disables recovery. Any vault design must choose a position on this axis.
 
-4. **Empirical confirmation/correction of prior estimates.** Harding's ~3,000 chunks/block estimate is confirmed (measured: 3,427 CCV, structural). OP_VAULT hand-estimated vsizes were significantly wrong (trigger: 200→292, recovery: 170→246) due to the 2-input fee-wallet pattern. The CCV mode confusion result with undefined flags is an empirical demonstration, though closer to a bug report than a research contribution.
+4. **Empirical confirmation/correction of prior estimates.** Harding's ~3,000 chunks/block estimate is confirmed (measured: 3,427 CCV, structural). OP_VAULT hand-estimated vsizes were significantly wrong (trigger: 200→292, recovery: 170→246) due to the 2-input fee-wallet pattern.
+5. **CCVWildSpend: full vault UTXO theft via OP_SUCCESS (TM8).** The CCV mode confusion risk was documented by Ingala as a design decision. Our contribution is (a) the `CCVWildSpend` transition model — a vault UTXO consumed with zero typed outputs, funds vanishing into attacker-controlled UTXOs; (b) systematic mode sweep confirming all undefined values (3, 4, 7, 128, 255) produce bypass; (c) escalation from synthetic contract to production-shaped Vault taptree. This is closer to a high-severity bug report than a research contribution, but the transition model and systematic sweep are new. **Verified via `exp_ccv_mode_bypass` on CCV regtest (2026-02-22).** All 5 undefined modes confirmed: THEFT CONFIRMED on each, 110 vB per bypass spend.
 
 The per-experiment relationship to prior work is detailed in `REFERENCES.md` §2.
 
@@ -330,11 +331,27 @@ Tests three CCV-specific edge cases classified as developer footguns, not advers
 
 **Threat model — mode confusion (CCV) [EMPIRICAL]:**
 - Method: Constructs raw Tapscript leaves with OP_CHECKCONTRACTVERIFY using each flag value (0, 1, 2, 3, 4, 7, 128, 255), funds them into P2TR outputs on regtest, and attempts mutated spends redirecting funds to an attacker address.
-- Defined modes (0-3): CCV enforces covenant rules — mutated spend is rejected.
-- Undefined modes (4, 7, 128, 255): OP_SUCCESS triggers — script succeeds unconditionally, attacker steals funds.
+- Defined modes (0, 1, 2): CCV enforces covenant rules — mutated spend is rejected.
+- Undefined modes (3, 4, 7, 128, 255): OP_SUCCESS triggers — script succeeds unconditionally, attacker steals funds.
+- Pseudocode (checkcontractverify.md lines 75–76): `if flags < CCV_FLAG_CHECK_INPUT or flags > CCV_FLAG_DEDUCT_OUTPUT_AMOUNT: return success()`
+- Valid range: [-1, 0, 1, 2]. Everything else → unconditional success.
 - Uses pymatt's StandardAugmentedP2TR + StandardClause with custom CScript to construct each test contract, and ContractManager to fund/spend on regtest.
 - Impact if deployed: An output with an undefined mode has zero covenant enforcement. Anyone can spend it. Severity: Critical if deployed, but this is a static-analysis-catchable bug, not a runtime attack.
 - Design tradeoff: OP_SUCCESS enables clean soft-fork upgrades (new flag meanings without hard forks) but creates a silent failure mode for developers.
+
+**Threat model — CCVWildSpend: full vault UTXO theft via OP_SUCCESS [TM8]:**
+- Escalation of the mode confusion footgun to an actual Vault contract. Experiment: `exp_ccv_mode_bypass.py` (vault-comparison framework).
+- Construction: A `VulnerableVault` identical to the production `Vault` taptree (trigger + recover leaves), except the recover leaf's CCV uses `mode=3` (or 4, 7, 128, 255).
+- Attack: Anyone who can construct the witness path to the poisoned recover leaf can spend the vault UTXO to an arbitrary address. No signature, no output validation, no amount checking.
+- Control: Same vault with `mode=0` rejects the identical spend (CCV checks output scriptPubKey against `recover_pk`).
+- Sweep: All tested undefined modes (3, 4, 7, 128, 255) produce full covenant bypass.
+- Severity: CRITICAL. This is the highest-severity CCV finding.
+  - Single-byte encoding error causes complete fund loss.
+  - The vault address and taptree are structurally indistinguishable from a correct vault.
+  - Not a theoretical concern — realistic encoding paths include: off-by-one (mode=3, one past DEDUCT_OUTPUT_AMOUNT), unsigned cast (−2 → 254), byte truncation in serialization.
+- Distinction from `mode_confusion_attack.py`: That test uses a synthetic `ModeConfusionContract`. This test uses the actual `Vault` taptree structure with only the mode value changed, demonstrating that the vulnerability affects production-shaped contracts.
+- Prior art: Ingala documented OP_SUCCESS for undefined CCV flags as a design decision for soft-fork safety. The `CCVWildSpend` transition model (vault UTXO → zero typed outputs) and the systematic mode sweep are new empirical contributions.
+- Status: **Verified on CCV regtest (2026-02-22).** Control (mode=0) correctly rejected mutated spend. All 5 undefined modes (3, 4, 7, 128, 255) accepted — THEFT CONFIRMED on each. Bypass spend vsize: 110 vB, weight: 438–440. Experiment: `vault-comparison/experiments/exp_ccv_mode_bypass.py`.
 
 **Threat model — keypath bypass (Taproot misconfiguration):**
 - Attacker: Has the private key corresponding to the Taproot internal key. This only exists if the developer passed a real public key as `alternate_pk` instead of using a NUMS point.
@@ -424,7 +441,7 @@ Demonstrates trigger key compromise: attacker calls start_withdrawal() with atta
 
 ### 4.1 Unified Threat Model Comparison Matrix
 
-This matrix synthesizes the per-experiment threat models into a three-way comparison across all attack classes. Each row (TM1–TM7) corresponds to a distinct adversary profile. The "Measured vsize" column uses empirically verified values from regtest runs (see §4.2 for verification methodology).
+This matrix synthesizes the per-experiment threat models into a three-way comparison across all attack classes. Each row (TM1–TM8) corresponds to a distinct adversary profile. The "Measured vsize" column uses empirically verified values from regtest runs (see §4.2 for verification methodology). TM8 (CCV mode bypass) is empirically verified via `exp_ccv_mode_bypass` (2026-02-22).
 
 **Key:**
 - *Attacker cost* = vsize × fee_rate (structural; fee_rate is exogenous).
@@ -496,6 +513,23 @@ TM  Attack class              CTV                         CCV                   
                               permanently stuck or        instance.  Multiple          UTXOs at the address.
                               overpays miners.            deposits to same addr are    Each can be triggered
                                                           individually spendable.      and recovered normally.
+
+8   CCV mode bypass           N/A (CTV has no CCV         CRITICAL — undefined CCV     N/A (OP_VAULT uses         G, M
+    (OP_SUCCESS via            opcode; script structure    mode values (3, 4, 7, 128,   OP_VAULT / OP_VAULT_RECOVER
+    undefined CCV flags)       is CTV-only)               255) cause OP_SUCCESS.        opcodes, not CCV)
+                                                          Full covenant bypass: no
+                                                          signature, no output
+                                                          validation, no amount
+                                                          checking.  A single-byte
+                                                          encoding bug in wallet/
+                                                          compiler → complete fund
+                                                          loss.  CCVWildSpend:
+                                                          vault UTXO → arbitrary
+                                                          attacker-controlled
+                                                          outputs.
+                              N/A                         Measured: 0 vB marginal      N/A
+                                                          (no covenant check occurs)
+                                                          Verified (exp_ccv_mode_bypass)
 ```
 
 **Inverse hierarchies** (from Experiment F):
@@ -511,7 +545,7 @@ TM  Attack class              CTV                         CCV                   
 | CCV        | High        | Moderate           | Low        |
 | OP_VAULT   | High        | High               | High       |
 
-CTV's "conditional" security depends on relay policy (TRUC/v3 would eliminate TM1). CCV's "moderate" reflects keyless griefing (TM2/TM4). OP_VAULT's "high complexity" reflects three-key management and recoveryauth key-loss risk.
+CTV's "conditional" security depends on relay policy (TRUC/v3 would eliminate TM1). CCV's "moderate" reflects keyless griefing (TM2/TM4) and the OP_SUCCESS risk from undefined modes (TM8). OP_VAULT's "high complexity" reflects three-key management and recoveryauth key-loss risk.
 
 ### 4.2 OP_VAULT Vsize Verification
 

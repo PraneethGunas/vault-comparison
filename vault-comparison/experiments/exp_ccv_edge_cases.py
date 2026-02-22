@@ -46,6 +46,13 @@ Classification: Mitigated by typed APIs and named constants in pymatt.
 A conference reviewer would note that findings 2 and 3 apply to general
 Taproot contract development, not CCV specifically.  Only finding 1
 (OP_SUCCESS for undefined modes) is CCV-specific.
+
+=== TM8 ESCALATION ===
+This experiment tests mode confusion on minimal synthetic contracts.
+The escalation to production-shaped Vault taptrees is in
+exp_ccv_mode_bypass.py, which demonstrates the CCVWildSpend transition
+(vault UTXO → complete covenant bypass → funds to attacker address).
+See exp_ccv_mode_bypass for the critical-severity finding (TM8).
 """
 
 import sys

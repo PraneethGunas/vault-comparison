@@ -89,7 +89,11 @@ CCV's partial withdrawal capability (trigger_and_revault) is a core feature of [
 
 ### G. ccv_edge_cases
 
-The OP_SUCCESS semantics for undefined CCV flags are a deliberate consensus design choice for forward compatibility, specified in [BIP-443](https://bips.dev/443/). Mode confusion risk is discussed by Ingala ([Ing23](https://gnusha.org/pi/bitcoindev/CAMhCMoFYF+9NL1sqKfn=ma3C_mfQv7mj2fqbqO5WXVwd6vyhLw@mail.gmail.com/)). Keypath bypass is inherent to Taproot (BIP-341), not CCV-specific. This experiment constructs P2TR outputs with undefined CCV flag bytes (4, 7, 128, 255), funds them on regtest, and confirms spends succeed unconditionally via OP_SUCCESS.
+The OP_SUCCESS semantics for undefined CCV flags are a deliberate consensus design choice for forward compatibility, specified in [BIP-443](https://bips.dev/443/). Mode confusion risk is discussed by Ingala ([Ing23](https://gnusha.org/pi/bitcoindev/CAMhCMoFYF+9NL1sqKfn=ma3C_mfQv7mj2fqbqO5WXVwd6vyhLw@mail.gmail.com/)). Keypath bypass is inherent to Taproot (BIP-341), not CCV-specific. This experiment constructs P2TR outputs with undefined CCV flag bytes (4, 7, 128, 255), funds them on regtest, and confirms spends succeed unconditionally via OP_SUCCESS. See also experiment M (ccv_mode_bypass) for the production-vault escalation.
+
+### M. ccv_mode_bypass
+
+Escalates the synthetic mode-confusion finding from experiment G to production-shaped vault taptrees. Constructs a `VulnerableVault` with the same taptree structure as pymatt's production `Vault` (trigger + recover leaves), but the recover leaf's CCV uses an undefined mode value. Demonstrates the CCVWildSpend transition model: vault UTXO → zero typed outputs → funds into attacker-controlled UTXOs. Systematic mode sweep across 5 undefined values (3, 4, 7, 128, 255) confirms all produce complete covenant bypass. Prior art: Ingala [Ing23] documented OP_SUCCESS as a design decision for soft-fork safety; our contribution is the production-vault escalation and systematic measurement. Status: Verified via regtest measurement (2026-02-22).
 
 ### H. watchtower_exhaustion
 
@@ -123,7 +127,7 @@ This work provides an empirical comparison framework for CTV ([BIP-119](https://
 
 **What the framework contributes:**
 
-1. The first three-way empirical comparison — regtest-measured transaction sizes for CTV, CCV, and OP_VAULT (12 experiments, 7 structured threat models, TM1–TM7) under a uniform adapter interface. OP_VAULT measurements revealed the fee-input overhead (all non-deposit txs +80–90 vB vs estimates), correcting prior hand-estimates.
+1. The first three-way empirical comparison — regtest-measured transaction sizes for CTV, CCV, and OP_VAULT (12 experiments, 8 structured threat models, TM1–TM8) under a uniform adapter interface. OP_VAULT measurements revealed the fee-input overhead (all non-deposit txs +80–90 vB vs estimates), correcting prior hand-estimates.
 
 2. Fee-dependent inversion of security rankings — the cross-experiment fee sensitivity synthesis (experiment J) shows that the relative security ordering of vault designs flips depending on fee environment. In low-fee regimes, CCV/OP_VAULT are safer (splitting is infeasible); in high-fee regimes, watchtower exhaustion becomes feasible while CTV's fee pinning cost remains negligible. No prior analysis has demonstrated this crossover.
 
