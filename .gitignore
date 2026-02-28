@@ -14,6 +14,7 @@ vault-comparison/opvault-demo.log
 
 # === Review / process docs (not part of the research output) ===
 PEER_REVIEW_vault_comparison.md
+setup-context.md
 
 # === Generated outputs (reproducible from source) ===
 fee_sensitivity_analysis.md

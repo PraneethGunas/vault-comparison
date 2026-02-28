@@ -637,7 +637,7 @@ research experiments/
 ├── simple-op-vault/
 ├── vault-comparison/
 ├── switch-node.sh
-├── context.md
+├── DESIGN.md
 └── REFERENCES.md
 ```
 

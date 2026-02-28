@@ -115,7 +115,7 @@ Trigger key compromise is the standard adversary model for vault security, analy
 
 ## 3. Contribution Summary
 
-This work provides an empirical comparison framework for CTV ([BIP-119](https://bips.dev/119/)), CCV ([BIP-443](https://bips.dev/443/)), and OP_VAULT ([BIP-345](https://bips.dev/345/)) vault designs. The threat models and attack vectors tested here originate from the works cited above — the conceptual contribution is measurement and cross-design synthesis, not vulnerability discovery. See `context.md` §1.1 for the full novelty statement.
+This work provides an empirical comparison framework for CTV ([BIP-119](https://bips.dev/119/)), CCV ([BIP-443](https://bips.dev/443/)), and OP_VAULT ([BIP-345](https://bips.dev/345/)) vault designs. The threat models and attack vectors tested here originate from the works cited above — the conceptual contribution is measurement and cross-design synthesis, not vulnerability discovery. See `DESIGN.md` §1.1 for the full novelty statement.
 
 **What prior work established (we quantify, not discover):**
 

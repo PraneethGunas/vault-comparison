@@ -14,8 +14,7 @@ The three covenant proposals represent fundamentally different design philosophi
 research experiments/
 ├── README.md                 # This file
 ├── REFERENCES.md             # Prior art and per-experiment citations
-├── context.md                # Architecture, threat models, experiment catalog
-├── setup-context.md          # Node environment and build instructions
+├── DESIGN.md                 # Architecture, threat models, experiment catalog
 ├── switch-node.sh            # Node manager (Inquisition / CCV / OP_VAULT)
 ├── vault-comparison/         # Framework source
 │   ├── run.py                # CLI runner
@@ -66,7 +65,7 @@ Each adapter requires a specific Bitcoin node variant:
 - **CCV:** Merkleize Bitcoin with CCV support (`./switch-node.sh ccv`)
 - **OP_VAULT:** jamesob/bitcoin opvault branch (`./switch-node.sh opvault`)
 
-Switching nodes wipes regtest state. See `setup-context.md` for build instructions and binary paths.
+Switching nodes wipes regtest state. See `switch-node.sh` environment variables for binary path overrides.
 
 ## Usage
 
@@ -237,6 +236,5 @@ An interactive research site lives in `site/` with its own git repo. It presents
 
 ## Further Reading
 
-- `context.md` — Architecture, adapter pattern, threat model methodology, full experiment catalog with threat models, regtest limitations
+- `DESIGN.md` — Architecture, adapter pattern, threat model methodology, full experiment catalog with threat models, regtest limitations
 - `REFERENCES.md` — Prior art survey with per-experiment attribution (BIPs 119, 345, 443; Swambo et al.; Harding's watchtower analysis)
-- `setup-context.md` — Node build instructions and environment setup
