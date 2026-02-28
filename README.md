@@ -59,13 +59,29 @@ pip install -r requirements.txt
 
 ## Node Requirements
 
-Each adapter requires a specific Bitcoin node variant:
+Each adapter requires a specific Bitcoin node variant. Clone and build all three:
 
-- **CTV:** Bitcoin Inquisition (`./switch-node.sh inquisition`)
-- **CCV:** Merkleize Bitcoin with CCV support (`./switch-node.sh ccv`)
-- **OP_VAULT:** jamesob/bitcoin opvault branch (`./switch-node.sh opvault`)
+```bash
+# CTV — Bitcoin Inquisition
+git clone https://github.com/AlejandroAkbal/bitcoin-inquisition.git ~/bitcoin-inquisition
+cd ~/bitcoin-inquisition && cmake -B build && cmake --build build -j$(nproc)
 
-Switching nodes wipes regtest state. See `switch-node.sh` environment variables for binary path overrides.
+# CCV — Merkleize Bitcoin (inq-ccv branch)
+git clone -b inq-ccv https://github.com/AlejandroAkbal/merkleize-bitcoin.git ~/merkleize-bitcoin-ccv
+cd ~/merkleize-bitcoin-ccv && cmake -B build && cmake --build build -j$(nproc)
+
+# OP_VAULT — jamesob/bitcoin (autotools, not cmake)
+git clone -b 2023-02-opvault-inq https://github.com/jamesob/bitcoin.git ~/bitcoin-opvault
+cd ~/bitcoin-opvault && ./autogen.sh && ./configure --without-miniupnpc && make -j$(nproc)
+```
+
+The `switch-node.sh` script manages starting/stopping nodes and wiping regtest between runs:
+
+- **CTV:** `./switch-node.sh inquisition`
+- **CCV:** `./switch-node.sh ccv`
+- **OP_VAULT:** `./switch-node.sh opvault`
+
+Switching wipes regtest state. If your node paths differ from the defaults (`~/bitcoin-inquisition`, `~/merkleize-bitcoin-ccv`, `~/bitcoin-opvault`), set the environment overrides documented in `switch-node.sh --help`.
 
 ## Usage
 
@@ -232,9 +248,19 @@ bash run_all.sh
 
 ## Site
 
-An interactive research site lives in `site/` with its own git repo. It presents the threat models, measured evidence, and cross-covenant comparisons from the experiments. Hosted at [vaults-research-page](https://github.com/PraneethGunas/vaults-research-page).
+An interactive research site lives in `site/` with its own git repo. It presents the threat models, measured evidence, and cross-covenant comparisons from the experiments. Hosted at [research.praneethg.xyz](https://research.praneethg.xyz).
 
 ## Further Reading
 
 - `DESIGN.md` — Architecture, adapter pattern, threat model methodology, full experiment catalog with threat models, regtest limitations
 - `REFERENCES.md` — Prior art survey with per-experiment attribution (BIPs 119, 345, 443; Swambo et al.; Harding's watchtower analysis)
+
+## Credits
+
+This work builds on vault implementations and covenant proposals by:
+
+- **Jeremy Rubin** — OP_CHECKTEMPLATEVERIFY (BIP-119) and the CTV vault design
+- **Salvatore Ingala** — OP_CHECKCONTRACTVERIFY (BIP-443), the MATT framework, and the `pymatt` vault implementation
+- **James O'Beirne** — OP_VAULT (BIP-345) and the `opvault-demo` reference implementation
+
+See `REFERENCES.md` for the full prior art survey.
