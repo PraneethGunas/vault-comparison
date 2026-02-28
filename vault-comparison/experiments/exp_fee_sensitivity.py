@@ -38,20 +38,41 @@ from experiments.registry import register
 # ── Structural vsize constants ───────────────────────────────────────
 # These are DETERMINISTIC values from the script/witness structure.
 # On regtest, identical scripts always produce identical vsize.
-# Sources: fee_pinning, recovery_griefing, watchtower_exhaustion,
-# lifecycle_costs experiment code + docstrings.
+# Sources: lifecycle_costs (2026-02-24), fee_pinning, recovery_griefing,
+# watchtower_exhaustion.  CTV/CCV/OPV lifecycle values verified against
+# regtest measurements in results/2026-02-24_141827/.
 
 # CTV lifecycle (simple-ctv-vault)
-CTV_TOVAULT_VSIZE = 154       # P2WSH funding tx
-CTV_UNVAULT_VSIZE = 164       # CTV-committed unvault
-CTV_WITHDRAW_VSIZE = 108      # P2WPKH hot withdrawal after CSV
-CTV_TOCOLD_VSIZE = 180        # Cold sweep (recovery path)
+# VERIFIED against lifecycle_costs regtest measurements (results/2026-02-24_141827/).
+#
+# Key structural notes:
+#   - tovault (122 vB) is a bare CTV output (1-in/1-out), not P2WSH-wrapped.
+#     Lighter than CCV/OPV deposits because the output script is just OP_CTV.
+#   - unvault (94 vB) is the CTV-committed unvault, spending the bare CTV
+#     output.  Small because the CTV witness is minimal (no signatures).
+#   - tohot/withdraw (152 vB) is the hot withdrawal after CSV, P2WSH with
+#     2 outputs (hot destination + anchor).  The anchor output adds ~44 vB
+#     compared to a bare P2WPKH output.
+#   - tocold (180 vB) is the cold sweep (recovery path), hand-estimated.
+#     Not yet verified via recovery experiment on the Inquisition node.
+CTV_TOVAULT_VSIZE = 122       # bare CTV funding tx (1-in/1-out)
+CTV_UNVAULT_VSIZE = 94        # CTV-committed unvault (minimal witness)
+CTV_WITHDRAW_VSIZE = 152      # P2WSH hot withdrawal after CSV (2 outputs: hot + anchor)
+CTV_TOCOLD_VSIZE = 180        # Cold sweep (recovery path) — hand estimate, pending verification
 CTV_LIFECYCLE_TOTAL = CTV_TOVAULT_VSIZE + CTV_UNVAULT_VSIZE + CTV_WITHDRAW_VSIZE
 
 # CCV lifecycle (pymatt vault)
-CCV_TOVAULT_VSIZE = 154       # P2TR funding tx
+# VERIFIED against lifecycle_costs regtest measurements (results/2026-02-24_141827/).
+#
+# Key structural notes:
+#   - tovault (165 vB) is a P2TR funding tx with 2 outputs (vault + change).
+#     Larger than CTV's 122 because Taproot outputs are 34 bytes vs CTV's ~24.
+#   - trigger (154 vB) unchanged — Schnorr sig + CCV witness.
+#   - withdraw (111 vB) is the CTV-committed withdrawal after CSV (1-in/1-out).
+#   - recover (122 vB) is keyless recovery — no signature, just CCV witness.
+CCV_TOVAULT_VSIZE = 165       # P2TR funding tx (1-in/2-out: vault + change)
 CCV_TRIGGER_VSIZE = 154       # Trigger unvault (Schnorr sig + CCV)
-CCV_WITHDRAW_VSIZE = 110      # CTV-committed withdrawal after CSV
+CCV_WITHDRAW_VSIZE = 111      # CTV-committed withdrawal after CSV
 CCV_RECOVER_VSIZE = 122       # Keyless recovery (no sig needed)
 CCV_LIFECYCLE_TOTAL = CCV_TOVAULT_VSIZE + CCV_TRIGGER_VSIZE + CCV_WITHDRAW_VSIZE
 
