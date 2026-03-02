@@ -1,6 +1,7 @@
 # === Upstream cloned repos (have their own git history) ===
 simple-op-vault/
 simple-ctv-vault/
+simple-cat-csfs-vault/
 pymatt/
 bitcoin-inquisition/
 bitcoin-opvault/
