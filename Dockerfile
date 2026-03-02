@@ -82,7 +82,8 @@ WORKDIR /workspace
 # Clone upstream vault implementations
 RUN git clone --depth 1 https://github.com/jamesob/simple-ctv-vault.git \
     && git clone --depth 1 https://github.com/Merkleize/pymatt.git \
-    && git clone --depth 1 https://github.com/jamesob/opvault-demo.git simple-op-vault
+    && git clone --depth 1 https://github.com/jamesob/opvault-demo.git simple-op-vault \
+    && git clone --depth 1 https://github.com/PraneethGunas/cat-csfs-vault.git simple-cat-csfs-vault
 
 # Copy framework source
 COPY vault-comparison/ vault-comparison/
