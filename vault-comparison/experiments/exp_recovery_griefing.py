@@ -108,6 +108,8 @@ def run(adapter: VaultAdapter) -> ExperimentResult:
             _run_ctv_griefing(adapter, result, rpc)
         elif adapter.name == "opvault":
             _run_opvault_griefing(adapter, result, rpc)
+        elif adapter.name == "cat_csfs":
+            _run_cat_csfs_griefing(adapter, result, rpc)
     except Exception as e:
         result.error = str(e)
         result.observe(f"FAILED: {e}")
@@ -640,6 +642,172 @@ def _run_opvault_griefing(adapter, result, rpc):
     for fee_rate in [1, 10, 50, 100, 500]:
         atk_cost = recover_vsize * fee_rate
         def_cost = trigger_vsize * fee_rate
+        result.observe(
+            f"  {fee_rate:>3} sat/vB: attacker={atk_cost:>8,} sats/round, "
+            f"defender={def_cost:>8,} sats/round"
+        )
+
+
+def _run_cat_csfs_griefing(adapter, result, rpc):
+    """CAT+CSFS: Recovery requires the COLD KEY.
+
+    On CAT+CSFS, recovery sweeps funds to the cold wallet using the cold
+    key's signature.  The griefing dynamic is similar to CTV's but with
+    different roles:
+
+    - CTV:      Attacker (hot key) triggers unvault → Defender sweeps to cold
+    - CAT+CSFS: Attacker (hot key) triggers unvault → Defender recovers with cold key
+    - CCV:      Attacker (no key) calls recover → Defender re-triggers
+    - OP_VAULT: Attacker (recoveryauth key) calls recover → Defender re-triggers
+
+    CAT+CSFS griefing requires the hot key (like CTV) — the attacker
+    triggers unvault, and the defender must recover with the cold key
+    before the CSV timelock expires.
+    """
+    result.observe("=== CAT+CSFS Recovery Griefing (hot key required) ===")
+    result.observe(
+        "On CAT+CSFS, an attacker with the HOT KEY can trigger unvault, "
+        "forcing the defender to recover with the COLD KEY before the CSV "
+        "timelock expires.  This is analogous to CTV's hot-key griefing."
+    )
+
+    # ── Phase 1: Measure costs ───────────────────────────────────────
+    result.observe("=== Phase 1: Measure trigger and recovery vsize ===")
+
+    vault = adapter.create_vault(VAULT_AMOUNT)
+    result.observe(f"Vault created: {vault.vault_txid[:16]}... ({vault.amount_sats} sats)")
+
+    unvault = adapter.trigger_unvault(vault)
+    trigger_metrics = adapter.collect_tx_metrics(
+        TxRecord(
+            txid=unvault.unvault_txid,
+            label="trigger",
+            amount_sats=unvault.amount_sats,
+        ),
+        rpc,
+    )
+    trigger_vsize = trigger_metrics.vsize or 0
+    result.observe(f"Trigger tx (attacker's cost): {trigger_vsize} vB")
+    result.add_tx(trigger_metrics)
+
+    recover_record = adapter.recover(unvault)
+    recover_metrics = adapter.collect_tx_metrics(recover_record, rpc)
+    recover_vsize = recover_metrics.vsize or 0
+    result.observe(f"Recovery tx (defender's cost): {recover_vsize} vB")
+    result.add_tx(recover_metrics)
+
+    if trigger_vsize > 0 and recover_vsize > 0:
+        asymmetry = trigger_vsize / recover_vsize
+        result.observe(
+            f"Cost asymmetry: attacker_trigger/defender_recover = "
+            f"{trigger_vsize}/{recover_vsize} = {asymmetry:.2f}x"
+        )
+    else:
+        asymmetry = 1.0
+
+    # ── Phase 2: Griefing loop ───────────────────────────────────────
+    result.observe(f"=== Phase 2: CAT+CSFS griefing loop ({MAX_GRIEF_ROUNDS} rounds) ===")
+    result.observe(
+        "NOTE: The attacker needs the HOT KEY to trigger unvault.  "
+        "This is the same bar as CTV's griefing attack."
+    )
+
+    attacker_cumulative = 0
+    defender_cumulative = 0
+    rounds_completed = 0
+
+    for round_num in range(1, MAX_GRIEF_ROUNDS + 1):
+        try:
+            vault = adapter.create_vault(VAULT_AMOUNT)
+            unvault = adapter.trigger_unvault(vault)
+
+            u_metrics = adapter.collect_tx_metrics(
+                TxRecord(txid=unvault.unvault_txid, label=f"trigger_r{round_num}",
+                         amount_sats=unvault.amount_sats), rpc)
+            t_vsize = u_metrics.vsize or trigger_vsize
+
+            r_record = adapter.recover(unvault)
+            r_metrics = adapter.collect_tx_metrics(r_record, rpc)
+            r_vsize = r_metrics.vsize or recover_vsize
+
+            attacker_cumulative += t_vsize
+            defender_cumulative += r_vsize
+            rounds_completed = round_num
+
+            if round_num <= 3 or round_num % 5 == 0 or round_num == MAX_GRIEF_ROUNDS:
+                result.observe(
+                    f"  Round {round_num}: trigger={t_vsize} vB, "
+                    f"recover={r_vsize} vB  |  "
+                    f"Cumulative: attacker={attacker_cumulative} vB, "
+                    f"defender={defender_cumulative} vB"
+                )
+
+        except Exception as e:
+            result.observe(f"  Round {round_num}: FAILED — {e}")
+            break
+
+    result.add_tx(TxMetrics(
+        label="griefing_loop_totals",
+        vsize=attacker_cumulative + defender_cumulative,
+        fee_sats=0,
+        num_inputs=rounds_completed,
+        num_outputs=rounds_completed,
+    ))
+
+    if attacker_cumulative > 0 and defender_cumulative > 0:
+        actual_ratio = attacker_cumulative / defender_cumulative
+        result.observe(
+            f"After {rounds_completed} rounds: attacker={attacker_cumulative} vB, "
+            f"defender={defender_cumulative} vB.  Ratio: {actual_ratio:.2f}x."
+        )
+
+    # ── Phase 3: Four-way comparison ─────────────────────────────────
+    result.observe("=== Phase 3: Four-way griefing comparison ===")
+    result.observe(
+        "  CCV:      Keyless recovery — NO key needed.  Any node can grief.  "
+        "            Bar: ZERO."
+    )
+    result.observe(
+        "  OP_VAULT: Authorized recovery — recoveryauth key needed.  "
+        "            Bar: key compromise."
+    )
+    result.observe(
+        "  CTV:      Hot-key sweep — hot key needed (reverse direction).  "
+        "            Attacker triggers, defender sweeps to cold.  "
+        "            Can escalate to fund theft with fee key."
+    )
+    result.observe(
+        f"  CAT+CSFS: Hot-key trigger — hot key needed (same direction as CTV).  "
+        f"            Attacker triggers, defender recovers with cold key.  "
+        f"            Trigger={trigger_vsize} vB, recover={recover_vsize} vB."
+    )
+    result.observe(
+        "  KEY DIFFERENCE from CTV: CAT+CSFS uses SIGHASH_SINGLE|ANYONECANPAY, "
+        "so there is NO fee key and NO anchor outputs.  Hot-key griefing CANNOT "
+        "escalate to fee pinning.  The combined hot+fee key attack that makes "
+        "CTV griefing critical is NOT possible on CAT+CSFS."
+    )
+    result.observe(
+        "  HIERARCHY (by escalation severity):"
+    )
+    result.observe(
+        "    1. CTV (hot key grief → can escalate to fund theft via fee pinning)"
+    )
+    result.observe(
+        "    2. CCV (keyless grief — wider surface but liveness-only)"
+    )
+    result.observe(
+        "    3. CAT+CSFS (hot key grief — same bar as CTV but CANNOT escalate)"
+    )
+    result.observe(
+        "    4. OP_VAULT (recoveryauth key — narrowest surface, liveness-only)"
+    )
+
+    # Fee rate analysis
+    result.observe("=== Phase 4: Fee-rate sensitivity (CAT+CSFS) ===")
+    for fee_rate in [1, 10, 50, 100, 500]:
+        atk_cost = trigger_vsize * fee_rate
+        def_cost = recover_vsize * fee_rate
         result.observe(
             f"  {fee_rate:>3} sat/vB: attacker={atk_cost:>8,} sats/round, "
             f"defender={def_cost:>8,} sats/round"

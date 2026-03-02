@@ -85,6 +85,8 @@ def run(adapter: VaultAdapter) -> ExperimentResult:
             _phase2_ccv_comparison(adapter, result, rpc)
         elif adapter.name == "opvault":
             _phase2_opvault_comparison(adapter, result, rpc)
+        elif adapter.name == "cat_csfs":
+            _phase2_cat_csfs_comparison(adapter, result, rpc)
 
     except Exception as e:
         result.error = str(e)
@@ -640,6 +642,103 @@ def _phase2_opvault_comparison(adapter, result, rpc):
         "            Fee management is more explicit but avoids the anchor "
         "            vulnerability.  Fee wallet key is NOT baked into the "
         "            vault script (unlike CTV's fee key in the CTV hash)."
+    )
+
+    # Clean up
+    try:
+        adapter.complete_withdrawal(unvault)
+    except Exception:
+        pass
+
+
+def _phase2_cat_csfs_comparison(adapter, result, rpc):
+    """Phase 2 (CAT+CSFS): Analyze fee model — SIGHASH_SINGLE|ANYONECANPAY, no anchors.
+
+    CAT+CSFS uses SIGHASH_SINGLE|ANYONECANPAY for trigger and withdraw txs.
+    This means the covenant signature commits to only ONE output, leaving
+    additional inputs/outputs free for fee management.  Anyone can attach
+    a fee-paying input without breaking the covenant — no anchor outputs needed.
+    """
+    result.observe("=== Phase 2: CAT+CSFS fee model (SIGHASH_SINGLE|ANYONECANPAY) ===")
+
+    vault = adapter.create_vault(VAULT_AMOUNT)
+    unvault = adapter.trigger_unvault(vault)
+
+    unvault_info = rpc.get_tx_info(unvault.unvault_txid)
+    n_outputs = len(unvault_info["vout"])
+    n_inputs = len(unvault_info["vin"])
+
+    result.observe(f"Trigger tx: {n_inputs} input(s), {n_outputs} output(s)")
+
+    has_anchor = False
+    for i, vout in enumerate(unvault_info["vout"]):
+        value_sats = int(vout["value"] * 100_000_000)
+        script_type = vout.get("scriptPubKey", {}).get("type", "unknown")
+        if value_sats < 1000:
+            has_anchor = True
+            result.observe(
+                f"  vout[{i}]: {value_sats} sats ({script_type}) — anchor-like output"
+            )
+        else:
+            result.observe(f"  vout[{i}]: {value_sats} sats ({script_type})")
+
+    if not has_anchor:
+        result.observe(
+            "CONFIRMED: CAT+CSFS trigger tx has NO anchor outputs.  "
+            "Descendant-chain pinning has no attack surface."
+        )
+    else:
+        result.observe(
+            "WARNING: Anchor-like output detected — investigate."
+        )
+
+    result.observe(
+        "FEE MODEL: CAT+CSFS uses SIGHASH_SINGLE|ANYONECANPAY for covenant "
+        "signatures.  The CSFS-verified signature commits to only the first "
+        "output (vault-loop or destination).  Additional inputs and outputs "
+        "can be freely attached for fee management without breaking the "
+        "covenant verification."
+    )
+    result.observe(
+        "PINNING ANALYSIS: CAT+CSFS is structurally resistant to descendant-"
+        "chain pinning because:"
+    )
+    result.observe(
+        "  (1) No anchor outputs — no external UTXO for attacker to chain from"
+    )
+    result.observe(
+        "  (2) No fee key baked into the covenant — fees come from external "
+        "      inputs attached at broadcast time"
+    )
+    result.observe(
+        "  (3) SIGHASH_SINGLE|ANYONECANPAY means the fee payer is chosen at "
+        "      spend time, not committed at vault creation time"
+    )
+
+    result.observe(
+        "COMPARISON WITH CTV: CTV bakes a fee key into the CTV hash at "
+        "vault creation time.  The fee key controls anchor outputs, creating "
+        "a pinning surface.  CAT+CSFS avoids this entirely by deferring fee "
+        "management to spend time via SIGHASH_SINGLE|ANYONECANPAY — similar "
+        "to CCV's relay-policy approach but with a different mechanism."
+    )
+
+    result.observe(
+        "FOUR-WAY COMPARISON:"
+    )
+    result.observe(
+        "  CTV:      Anchor outputs + fee key → descendant-chain pinning "
+        "            → fund theft (with hot+fee key).  CRITICAL vulnerability."
+    )
+    result.observe(
+        "  CCV:      No anchors, relay-policy fees → no pinning surface."
+    )
+    result.observe(
+        "  OP_VAULT: Fee inputs from separate wallet → no pinning surface."
+    )
+    result.observe(
+        "  CAT+CSFS: SIGHASH_SINGLE|ANYONECANPAY → no anchors, no pinning "
+        "            surface.  Fee payer chosen at broadcast time."
     )
 
     # Clean up

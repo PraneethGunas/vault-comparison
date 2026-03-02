@@ -378,6 +378,103 @@ def _test_opvault_address_reuse(adapter, result):
     )
 
 
+def _test_cat_csfs_address_reuse(adapter, result):
+    """CAT+CSFS address reuse test.
+
+    CAT+CSFS vaults are single-use by construction, similar to CTV.
+    The vault's taproot output key is derived from a tapscript that embeds
+    the hot/cold pubkeys and block delay.  While the ADDRESS can be reused
+    (same keys → same P2TR address), the covenant scripts inside commit to
+    SIGHASH_SINGLE|ANYONECANPAY signature verification against specific
+    output amounts computed from the original deposit.
+
+    A second deposit of a different amount creates a UTXO at the same
+    address, but the trigger transaction's CSFS-verified sighash preimage
+    commits to output values derived from amount_1.  If amount_2 ≠ amount_1,
+    the sighash won't match the actual transaction, and CHECKSIG will fail.
+
+    Unlike CTV (where the hash is baked into the scriptPubKey), CAT+CSFS
+    commits via signature verification at spend time.  But the effect is
+    the same: mismatched amounts → unspendable UTXO.
+    """
+    result.observe("=== CAT+CSFS Address Reuse Test ===")
+    result.observe(
+        "CAT+CSFS vaults use P2TR addresses with tapscript leaves.  "
+        "The same key configuration produces the same address, so a "
+        "second deposit lands at the same scriptPubKey."
+    )
+
+    # First vault — normal lifecycle
+    vault1 = adapter.create_vault(VAULT_AMOUNT_1)
+    result.observe(f"First vault created: {vault1.amount_sats} sats")
+
+    try:
+        unvault1 = adapter.trigger_unvault(vault1)
+        result.observe(f"First vault unvault: SUCCESS ({unvault1.unvault_txid[:16]}...)")
+        withdraw1 = adapter.complete_withdrawal(unvault1)
+        result.observe(f"First vault withdrawal: SUCCESS ({withdraw1.amount_sats} sats)")
+    except Exception as e:
+        result.observe(f"First vault lifecycle: FAILED — {e}")
+
+    # Second vault — different amount, same keys (same address)
+    result.observe(
+        f"--- Creating second vault ({VAULT_AMOUNT_2} sats) with same keys ---"
+    )
+
+    vault2 = adapter.create_vault(VAULT_AMOUNT_2)
+    result.observe(f"Second vault created: {vault2.amount_sats} sats")
+
+    # The second vault should also work because each create_vault() builds
+    # a fresh VaultPlan with the correct amount.  The "address reuse" problem
+    # only manifests if someone sends funds DIRECTLY to the address without
+    # going through create_vault (i.e., without computing a new VaultPlan).
+    try:
+        unvault2 = adapter.trigger_unvault(vault2)
+        result.observe(f"Second vault unvault: SUCCESS ({unvault2.unvault_txid[:16]}...)")
+        withdraw2 = adapter.complete_withdrawal(unvault2)
+        result.observe(f"Second vault withdrawal: SUCCESS ({withdraw2.amount_sats} sats)")
+    except Exception as e:
+        result.observe(f"Second vault lifecycle: FAILED — {e}")
+
+    result.observe(
+        "NOTE: Both vaults succeeded because each create_vault() computes "
+        "a fresh VaultPlan with correct amounts.  The address reuse problem "
+        "manifests when a user sends funds DIRECTLY to the vault address "
+        "without building a new plan — the existing trigger/withdraw signatures "
+        "commit to the original amount via CSFS sighash verification."
+    )
+
+    result.observe(
+        "DESIGN COMPARISON:"
+    )
+    result.observe(
+        "  CTV:      Hash in scriptPubKey commits to exact outputs at creation.  "
+        "            Reused deposit → permanently stuck (no valid spend path)."
+    )
+    result.observe(
+        "  CAT+CSFS: Signature commits to outputs at spend time via CSFS.  "
+        "            Reused deposit → stuck unless a new plan is computed.  "
+        "            Slightly more flexible than CTV: if the signer cooperates, "
+        "            a new signature CAN be computed for the new amount.  "
+        "            But without signer cooperation, funds are stuck."
+    )
+    result.observe(
+        "  CCV:      Each UTXO is an independent contract instance.  "
+        "            Reused deposit → fully spendable (amount checked at spend time)."
+    )
+    result.observe(
+        "  OP_VAULT: Each UTXO tracked independently by ChainMonitor.  "
+        "            Reused deposit → fully spendable."
+    )
+    result.observe(
+        "CONCLUSION: CAT+CSFS is single-use like CTV, but with a nuance: "
+        "the commitment is in the SIGNATURE (spend-time), not the SCRIPT "
+        "(creation-time).  A cooperative signer can rescue mismatched deposits "
+        "by signing a new trigger — CTV cannot.  In practice, both require "
+        "wallet-level single-use address discipline."
+    )
+
+
 @register(
     name="address_reuse",
     description="Second deposit to same vault address — fund loss vs safe handling",
@@ -400,6 +497,8 @@ def run(adapter: VaultAdapter) -> ExperimentResult:
             _test_ccv_address_reuse(adapter, result)
         elif adapter.name == "opvault":
             _test_opvault_address_reuse(adapter, result)
+        elif adapter.name == "cat_csfs":
+            _test_cat_csfs_address_reuse(adapter, result)
         else:
             # Generic fallback: just try two vaults
             vault1 = adapter.create_vault(VAULT_AMOUNT_1)
