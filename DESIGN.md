@@ -4,11 +4,12 @@ This document covers the architecture, design rationale, and experiment catalog 
 
 ## 1. Purpose
 
-This framework exists to produce reproducible, quantitative comparisons between Bitcoin vault covenant designs. It currently targets three implementations:
+This framework exists to produce reproducible, quantitative comparisons between Bitcoin vault covenant designs. It currently targets four implementations:
 
 1. CTV vault (`simple-ctv-vault`) — OP_CHECKTEMPLATEVERIFY (BIP 119) single-hop vault
 2. CCV vault (`pymatt`) — OP_CHECKCONTRACTVERIFY (BIP 443) + CTV full vault
 3. OP_VAULT vault (`simple-op-vault` / opvault-demo) — OP_VAULT + OP_VAULT_RECOVER (BIP 345) + CTV
+4. CAT+CSFS vault (`simple-cat-csfs-vault`) — OP_CAT (BIP 347) + OP_CHECKSIGFROMSTACK (BIP 348) dual-verification vault
 
 The goal is to separate design-level tradeoffs from implementation-level bugs, and to measure concrete costs (vsize, fees, key requirements, attack surfaces) rather than relying on qualitative comparisons alone.
 
@@ -24,11 +25,11 @@ The vault lifecycle model and threat vocabulary follow Swambo et al. ([arXiv 200
 
 The conceptual contribution is a *unified measurement framework* that reveals how design-level tradeoffs compose under realistic fee environments. Specifically:
 
-1. **The first three-way empirical comparison.** Regtest-measured transaction sizes for CTV, CCV, and OP_VAULT under a uniform adapter interface (12 experiments, 8 threat models). Prior analysis compared at most two designs, or used estimates rather than measured values. The OP_VAULT vsize measurements reveal the fee-input overhead: all non-deposit transactions are 80–90 vB larger than expected (§4.2), making OP_VAULT's lifecycle 36% more expensive than CCV's.
+1. **The first four-way empirical comparison.** Regtest-measured transaction sizes for CTV, CCV, OP_VAULT, and CAT+CSFS under a uniform adapter interface (16 experiments, 12 threat models). Prior analysis compared at most two designs, or used estimates rather than measured values. The OP_VAULT vsize measurements reveal the fee-input overhead: all non-deposit transactions are 80–90 vB larger than expected (§4.2), making OP_VAULT's lifecycle 36% more expensive than CCV's.
 
 2. **Fee-dependent inversion of security rankings.** The cross-experiment fee sensitivity synthesis (experiment J) shows that the *relative* security ordering of vault designs flips depending on fee environment. In low-fee regimes (1–10 sat/vB), CCV and OP_VAULT are safer than CTV (fee pinning is cheap but splitting is infeasible). In high-fee regimes (100–500 sat/vB), watchtower exhaustion becomes feasible against CCV/OP_VAULT while CTV's fee pinning cost remains negligible — the security ordering inverts. This fee-dependent crossover is the strongest finding: no prior analysis has shown that the answer to "which vault is safest?" depends on the fee environment.
 
-3. **The inverse-ranking structural result.** Griefing resistance and fund safety under key loss are anti-correlated across all three designs: OP_VAULT > CTV > CCV for griefing resistance, CCV > CTV > OP_VAULT for key-loss safety. This is a necessary tradeoff (not an implementation artifact): blocking unauthorized recovery *requires* a key whose loss disables recovery. Any vault design must choose a position on this axis.
+3. **The inverse-ranking structural result.** Griefing resistance and fund safety under key loss are anti-correlated across the original three designs: OP_VAULT > CTV > CCV for griefing resistance, CCV > CTV > OP_VAULT for key-loss safety. CAT+CSFS adds a new axis: it has the strongest hot-key theft resistance (griefing-only, no theft path) but the weakest cold-key recovery safety (unconstrained OP_CHECKSIG). This is a necessary tradeoff (not an implementation artifact): blocking unauthorized recovery *requires* a key whose loss disables recovery. Any vault design must choose a position on this axis.
 
 4. **Empirical confirmation/correction of prior estimates.** Harding's ~3,000 chunks/block estimate is confirmed (measured: 3,427 CCV, structural). OP_VAULT hand-estimated vsizes were significantly wrong (trigger: 200→292, recovery: 170→246) due to the 2-input fee-wallet pattern.
 5. **CCVWildSpend: full vault UTXO theft via OP_SUCCESS (TM8).** The CCV mode confusion risk was documented by Ingala as a design decision. Our contribution is (a) the `CCVWildSpend` transition model — a vault UTXO consumed with zero typed outputs, funds vanishing into attacker-controlled UTXOs; (b) systematic mode sweep confirming all undefined values (3, 4, 7, 128, 255) produce bypass; (c) escalation from synthetic contract to production-shaped Vault taptree. This is closer to a high-severity bug report than a research contribution, but the transition model and systematic sweep are new. **Verified via `exp_ccv_mode_bypass` on CCV regtest (2026-02-22).** All 5 undefined modes confirmed: THEFT CONFIRMED on each, 110 vB per bypass spend.
@@ -37,7 +38,7 @@ The per-experiment relationship to prior work is detailed in `REFERENCES.md` §2
 
 ## 2. Protocol Background
 
-This section summarizes the three covenant opcodes and their vault constructions. Each subsection covers what the opcode commits to, what it does not, and how the vault lifecycle maps onto it.
+This section summarizes the four covenant approaches and their vault constructions. Each subsection covers what the opcode commits to, what it does not, and how the vault lifecycle maps onto it.
 
 ### 2.1 OP_CHECKTEMPLATEVERIFY (CTV / BIP 119)
 
@@ -133,6 +134,58 @@ Vault or Unvaulting → get_recovery_tx() (authorized with recoveryauth key)
 
 **OP_VAULT-specific limitations:** authorized recovery means the recoveryauth key is a single point of failure — its compromise enables an attacker to recover funds to the pre-committed recovery address (which the legitimate owner controls, so this is a liveness attack, not a theft vector). The implementation depends on `verystable` library with known API instability (`.nVersion` vs `.version`, `script=` vs `leaf_script=` parameter renames).
 
+### 2.4 OP_CAT + OP_CHECKSIGFROMSTACK (CAT+CSFS / BIP 347 + BIP 348)
+
+CAT+CSFS is not a single covenant opcode but a pair of general-purpose opcodes that together enable transaction introspection via dual signature verification — a technique described in Andrew Poelstra's [CAT and Schnorr Tricks](https://blog.blockstream.com/cat-and-schnorr-tricks-i/) series.
+
+`OP_CAT` (BIP 347) concatenates the top two stack elements. `OP_CHECKSIGFROMSTACK` (BIP 348) verifies a Schnorr signature against an arbitrary message on the stack (rather than the transaction sighash). By combining them, a script can:
+
+1. Have the spender provide the BIP 342 sighash preimage fields as witness data
+2. Use `OP_CAT` to assemble these into the full preimage on the stack
+3. Use `OP_CHECKSIGFROMSTACK` to verify a signature against the assembled preimage
+4. Use `OP_CHECKSIG` to verify the **same signature** against the real transaction sighash
+
+If both checks pass with the same key and signature, the witness-provided preimage must match the real transaction. The script can embed a constant (e.g., `sha_single_output` — the SHA256 hash of the expected output) that the spender cannot override, effectively constraining the transaction's outputs.
+
+**CAT+CSFS vault lifecycle** (`simple-cat-csfs-vault`):
+
+```
+Funded UTXO (P2WPKH)
+    │
+    │ tovault_tx (P2WPKH → P2TR)
+    ▼
+Vault UTXO (P2TR: trigger leaf + recover leaf)
+    │                          \
+    │ trigger_tx                recover_tx → cold wallet (P2WPKH)
+    │ (hot key, CSFS+CHECKSIG)  (cold key, simple CHECKSIG)
+    ▼
+Vault-Loop UTXO (P2TR: withdraw leaf + recover leaf)
+    │                          \
+    │ withdraw_tx               recover_tx → cold wallet (P2WPKH)
+    │ (hot key, CSV + CSFS+     (cold key, simple CHECKSIG)
+    │  CHECKSIG)
+    ▼
+Destination (P2WPKH)
+```
+
+The vault uses two Taproot addresses, each with a 2-leaf taptree on a NUMS internal key (provably unspendable key-path). The trigger and withdraw leaves use the dual CSFS+CHECKSIG introspection pattern with `SIGHASH_SINGLE|ANYONECANPAY` (0x83), embedding `sha_single_output` constants that constrain outputs. The recover leaves are simple `cold_pk OP_CHECKSIG` with no covenant constraint.
+
+**CAT+CSFS-specific properties:**
+
+1. **Destination lock** — The withdrawal destination is fixed at vault creation time (`sha_single_output` is embedded in the script). Cannot be changed without recovery + re-vaulting. This is the most rigid output constraint of any vault design.
+2. **Dual-verification security** — Hot key compromise cannot redirect funds. The attacker can only trigger to the pre-committed vault-loop output. Worst case is a grief attack (funds remain recoverable).
+3. **Unconstrained recovery** — The recover leaf is `cold_pk OP_CHECKSIG` with no introspection. Cold key compromise = immediate, unrestricted fund theft. This is the weakest recovery path of the four vault designs.
+4. **No recursive covenants** — The vault can only re-vault once (vault → vault-loop). No indefinite chaining because the script can't embed its own future scriptPubKey.
+5. **Fee flexibility** — `SIGHASH_SINGLE|ANYONECANPAY` commits to one input and one output. Additional fee-paying inputs can be attached without breaking the covenant.
+6. **520-byte stack limit** — The assembled preimage (227 bytes including TapSighash tag) is within the 520-byte OP_CAT consensus limit, with 293 bytes of headroom.
+
+**CAT+CSFS-specific limitations:**
+
+1. **Cold key is single point of failure** — No timelock, no watchtower window, no pre-committed recovery destination.
+2. **No partial withdrawal** — The entire vault amount flows through trigger → vault-loop → withdraw. No revault/splitting capability.
+3. **Rigid destination** — Changing the withdrawal address requires a full recovery + re-deposit cycle.
+4. **No batched triggers** — Each vault UTXO has its own embedded sha_single_output; cannot batch across vaults.
+
 ## 3. Architecture
 
 ### 3.1 Adapter Pattern
@@ -175,9 +228,11 @@ Tags enable selective execution (e.g., `--tag core` runs all foundational experi
 Experiments are classified along two orthogonal axes: **scope** (which covenants the experiment meaningfully runs on) and **concern** (what the experiment measures).
 
 **Scope tags:**
-- `comparative` — True head-to-head comparison. Runs the same test on both CTV and CCV, and the finding comes from the difference in outcomes. (lifecycle_costs, address_reuse, fee_pinning, recovery_griefing)
-- `capability_gap` — Demonstrates a capability CCV has that CTV lacks. Runs on both, but CTV reports "unsupported" while CCV demonstrates the feature and measures its cost. (multi_input, revault_amplification)
-- `ccv_only` — Only runs on CCV. Tests CCV-specific semantics or developer footguns with no CTV analog. (ccv_edge_cases)
+- `comparative` — True head-to-head comparison. Runs the same test on all four covenants, and the finding comes from the difference in outcomes. (lifecycle_costs, address_reuse, fee_pinning, recovery_griefing)
+- `capability_gap` — Demonstrates a capability some covenants have that others lack. (multi_input, revault_amplification)
+- `ccv_only` — Only runs on CCV. Tests CCV-specific semantics or developer footguns with no analog in other designs. (ccv_edge_cases, ccv_mode_bypass)
+- `opvault_specific` — Only runs on OP_VAULT. Tests OP_VAULT-specific key management and authorized recovery. (opvault_recovery_auth, opvault_trigger_key_theft)
+- `cat_csfs_only` — Only runs on CAT+CSFS. Tests dual-verification properties, witness manipulation, destination locking, and unconstrained recovery. (cat_csfs_hot_key_theft, cat_csfs_witness_manipulation, cat_csfs_destination_lock, cat_csfs_cold_key_recovery)
 
 There are currently no CTV-only experiments. CTV's weaknesses (stuck funds, fee pinning, no partial withdrawal) surface naturally within the comparative experiments.
 
@@ -251,6 +306,10 @@ All experiments run on Bitcoin Core regtest.  This is a deliberate methodologica
 | ccv_edge_cases | Fully valid (consensus-level script semantics) | N/A — OP_SUCCESS is not relay-dependent |
 | watchtower_exhaustion | vsize and economic model valid; recovery race untested | Temporal dynamics of sustained splitting |
 | fee_sensitivity | Fully valid (analytical, uses structural vsize) | N/A — does not produce on-chain transactions |
+| cat_csfs_hot_key_theft | Fully valid (consensus-level signature verification) | N/A — dual-verification is consensus |
+| cat_csfs_witness_manipulation | Fully valid (consensus-level sighash verification) | N/A — preimage checking is deterministic |
+| cat_csfs_destination_lock | Fully valid (structural script property) | N/A |
+| cat_csfs_cold_key_recovery | Fully valid (consensus-level spending) | Recovery race timing untested |
 
 ### 3.7 Fee Environment Sensitivity Analysis
 
@@ -402,7 +461,7 @@ Synthesizes structural vsize measurements from ALL experiments (CTV, CCV, OP_VAU
 2. Fee pinning attack economics: attack cost, dust capital, total deployment, rationality verdict.
 3. Recovery griefing economics: per-round costs for CCV (keyless), OP_VAULT (keyed), and CTV (hot-key) variants.
 4. Watchtower exhaustion economics: CCV and OP_VAULT splits-to-exhaust, batched recovery defense, viability crossover.
-5. Cross-experiment synthesis: three-way attack severity matrix, deployment guidance.
+5. Cross-experiment synthesis: four-way attack severity matrix, deployment guidance.
 
 This is an analytical experiment — it uses structural vsize constants (deterministic) and does not require on-chain transactions.
 
@@ -439,9 +498,53 @@ Demonstrates trigger key compromise: attacker calls start_withdrawal() with atta
 - Defender response: Rotate vault to new config with fresh keys. While the attack persists, funds accumulate at the recovery address — safe but inaccessible via normal withdrawal.
 - Residual risk: Funds are safe but locked in a trigger→recover cycle until the attacker stops or the owner rotates. The cost projection for sustained attack: at 50 sat/vB, each cycle costs the attacker 538 × 50 = 26,900 sats.
 
+### M. cat_csfs_hot_key_theft [cat_csfs_only, security, critical]
+Tests whether a compromised hot key can redirect vault funds in the CAT+CSFS design. Phase 1 performs a normal trigger as control (measures trigger vsize: 221 vB). Phase 2 constructs a trigger transaction with the output redirected to an attacker address, signs with the hot key, and broadcasts — REJECTED by consensus ("Invalid Schnorr signature") because the attacker's output doesn't match the embedded `sha_single_output`. Phase 3 analyzes extra output injection via SIGHASH_SINGLE (additional outputs possible but covenant output is locked). Phase 4 provides a four-way severity comparison.
+
+**Threat model — hot key theft (CAT+CSFS) [TM9]:**
+- Attacker: Has the hot key. Cannot modify the script (sha_single_output is embedded at vault creation).
+- Goal: Redirect vault funds to an attacker-controlled address.
+- Result: IMPOSSIBLE. The dual CSFS+CHECKSIG verification binds the output to the pre-committed sha_single_output. Changing the output causes the stack-computed sighash to diverge from the real transaction sighash — one signature check fails.
+- Residual capability: Grief attack only. The attacker can trigger unnecessary unvaults to the vault-loop, but funds remain recoverable by the cold key. The worst single-key outcome for CAT+CSFS is strictly weaker than CCV (where trigger key → withdrawal to attacker address) and OP_VAULT (same, modulo watchtower race).
+- Measured: trigger vsize = 221 vB.
+- Status: **Verified on Inquisition regtest (2026-03-01).** Mutated trigger rejected. Normal trigger accepted.
+
+### N. cat_csfs_witness_manipulation [cat_csfs_only, security, critical]
+Tests three independent witness-tampering attacks on the CAT+CSFS sighash preimage. Phase 1 is a control (normal trigger accepted). Phases 2–4 each tamper with a specific preimage field: nVersion in the prefix (byte 2: 0x02→0x03), codesep_pos in the suffix (0xFFFFFFFF→0x00000000), and hash_type (0x83→0x01). All three are rejected. Phase 5 performs stack size analysis: prefix=94B, sha_out=32B, suffix=37B, total preimage=163B, with TapSighash tag=227B, limit=520B, headroom=293B.
+
+**Threat model — witness manipulation (CAT+CSFS) [TM10]:**
+- Attacker: Has the hot key AND can provide arbitrary witness data.
+- Goal: Construct a valid witness that passes both CSFS and CHECKSIG checks but spends to a different output than intended.
+- Result: IMPOSSIBLE. Any byte-level change to the prefix or suffix causes the CSFS-checked sighash to diverge from the CHECKSIG-checked sighash. The embedded sha_single_output is the only invariant — all other fields must match exactly.
+- Stack size analysis: The full preimage (163 bytes) + TapSighash tag prefix (64 bytes) = 227 bytes on the stack before SHA256. This is well within the 520-byte OP_CAT consensus limit with 293 bytes of headroom.
+- Status: **Verified on Inquisition regtest (2026-03-01).** All three tampering vectors rejected.
+
+### O. cat_csfs_destination_lock [cat_csfs_only, security, configuration]
+Tests the unique destination-lock property of CAT+CSFS vaults. Phase 1 verifies that sha_single_output is embedded in the script and that normal withdrawal succeeds (210 vB). Phase 2 attempts withdrawal to an alternative address — REJECTED. Phase 3 measures the recovery escape hatch (125 vB) and calculates the destination rotation cost (~247 vB = recovery + new tovault). Phase 4 provides a four-way flexibility ranking.
+
+**Design analysis — destination lock:**
+- The CAT+CSFS vault has the most rigid destination constraint of any vault design. The sha_single_output hash (SHA256 of the destination amount + scriptPubKey) is embedded in the tapscript at vault creation time.
+- To change the destination: recover to cold wallet (125 vB) + create new vault with new destination (~122 vB) = ~247 vB rotation cost.
+- Flexibility ranking: CCV/OP_VAULT (destination specified at trigger time) > CTV (destination baked into CTV hash, but with more structural flexibility) > CAT+CSFS (destination baked into sha_single_output with no alternative path).
+- Tradeoff: Rigidity eliminates trigger-key redirection attacks but requires recovery for any destination change.
+- Status: **Verified on Inquisition regtest (2026-03-01).** Alternative destination rejected. Recovery escape hatch works.
+
+### P. cat_csfs_cold_key_recovery [cat_csfs_only, security, critical]
+Tests the unconstrained recovery path and cold key compromise. Phase 1 measures normal recovery from vault (125 vB) and vault-loop (125 vB). Phase 2 constructs a recovery transaction sending to an attacker address, signs with the cold key — ACCEPTED. Confirms cold key compromise = immediate, unrestricted theft. Phase 3 verifies no timelock on recovery (no OP_CHECKSEQUENCEVERIFY). Phase 4 provides a four-way recovery security ranking.
+
+**Threat model — cold key compromise (CAT+CSFS) [TM11]:**
+- Attacker: Has the cold (recovery) key. No other keys required.
+- Goal: Steal all vault funds immediately.
+- Result: SUCCESSFUL. The recover leaf is `cold_pk OP_CHECKSIG` — no covenant constraint, no output restriction, no timelock. The attacker sweeps funds to any address in a single transaction.
+- Severity: CRITICAL. This is the most severe single-key compromise across all four vault designs.
+- Comparison: CCV recovery is keyless but output-constrained (recover_pk). OP_VAULT recovery is key-authorized AND output-constrained (pre-committed recovery address). CTV recovery is CTV-constrained (pre-committed tocold transaction). CAT+CSFS recovery has no constraint at all.
+- Recovery security ranking: CCV (output-constrained, keyless) > OP_VAULT (output-constrained, keyed) > CTV (CTV-constrained) > CAT+CSFS (unconstrained).
+- Measured: recover vsize = 125 vB (from vault), 125 vB (from vault-loop).
+- Status: **Verified on Inquisition regtest (2026-03-01).** Attacker recovery to arbitrary address accepted.
+
 ### 4.1 Unified Threat Model Comparison Matrix
 
-This matrix synthesizes the per-experiment threat models into a three-way comparison across all attack classes. Each row (TM1–TM8) corresponds to a distinct adversary profile. The "Measured vsize" column uses empirically verified values from regtest runs (see §4.2 for verification methodology). TM8 (CCV mode bypass) is empirically verified via `exp_ccv_mode_bypass` (2026-02-22).
+This matrix synthesizes the per-experiment threat models into a four-way comparison across all attack classes. Each row (TM1–TM8) corresponds to a distinct adversary profile. The "Measured vsize" column uses empirically verified values from regtest runs (see §4.2 for verification methodology). TM8 (CCV mode bypass) is empirically verified via `exp_ccv_mode_bypass` (2026-02-22).
 
 **Key:**
 - *Attacker cost* = vsize × fee_rate (structural; fee_rate is exogenous).
@@ -450,73 +553,75 @@ This matrix synthesizes the per-experiment threat models into a three-way compar
 - *Exp* = experiment(s) that empirically test this threat model.
 
 ```
-TM  Attack class              CTV                         CCV                         OP_VAULT                    Exp
-──  ────────────────────────  ──────────────────────────  ──────────────────────────  ──────────────────────────  ───
-1   Fee pinning               CRITICAL — 25-descendant    N/A (no CPFP anchor)        N/A (no CPFP anchor;        C
-    (anchor-chain DoS)        chain blocks CPFP on                                    fee wallet is separate
-                              tocold; cost ~2,750 sats                                UTXO, not an anchor)
+TM  Attack class              CTV                         CCV                         OP_VAULT                    CAT+CSFS                    Exp
+──  ────────────────────────  ──────────────────────────  ──────────────────────────  ──────────────────────────  ──────────────────────────  ───
+1   Fee pinning               CRITICAL — 25-descendant    N/A (no CPFP anchor)        N/A (no CPFP anchor;        N/A (no CPFP anchor;        C
+    (anchor-chain DoS)        chain blocks CPFP on                                    fee wallet is separate      SIGHASH_SINGLE|ACP allows
+                              tocold; cost ~2,750 sats                                UTXO, not an anchor)        external fee inputs)
                               + ~16,400 dust capital.
                               Enables fund theft if
                               combined with hot key (TM3).
 
-2   Recovery griefing         MODERATE — hot key needed.  SEVERE — keyless, anyone     LOW — recoveryauth key      F, K
-    (forced-recovery DoS)     Attacker sweeps to cold     can front-run triggers       needed.  Higher bar than
-                              (reverse direction).        with recovery tx.            CCV, lower cost than CTV.
-                              Cost: ~164 vB/round.        Cost: ~122 vB/round.         Cost: ~246 vB/round.
-                              Can escalate to theft       Pure liveness denial.        Pure liveness denial.
-                              with fee key.               Funds always safe.           Funds always safe.
+2   Recovery griefing         MODERATE — hot key needed.  SEVERE — keyless, anyone     LOW — recoveryauth key      LOW — cold key needed.      F, K
+    (forced-recovery DoS)     Attacker sweeps to cold     can front-run triggers       needed.  Higher bar than    Highest bar: cold key is
+                              (reverse direction).        with recovery tx.            CCV, lower cost than CTV.   typically offline/hardware.
+                              Cost: ~164 vB/round.        Cost: ~122 vB/round.         Cost: ~246 vB/round.        Cost: ~125 vB/round.
+                              Can escalate to theft       Pure liveness denial.        Pure liveness denial.       But: cold key = total theft
+                              with fee key.               Funds always safe.           Funds always safe.          (TM11), so griefing is
+                                                                                                                   irrelevant if key is
+                                                                                                                   compromised.
 
-3   Trigger key theft         SEVERE — hot key +          SEVERE — trigger key →       MODERATE — trigger key →    L, F
-    (fund theft attempt)      fee key = fund theft.       withdrawal to attacker       withdrawal to attacker
-                              Hot key alone = liveness    addr.  Watchtower races      addr.  Watchtower races
-                              denial only (tocold).       via keyless recovery         via AUTHORIZED recovery
-                              Cost: ~164 vB trigger.      (~122 vB).  No escalation    (~246 vB).  Recoveryauth
-                                                          beyond single theft          key provides defense.
-                                                          attempt per round.           No fee-key escalation.
-                              Measured: 164 vB            Measured: 154 vB trigger     Measured: 292 vB trigger
+3   Trigger key theft         SEVERE — hot key +          SEVERE — trigger key →       MODERATE — trigger key →    LOW — hot key can only      L, F, M
+    (fund theft attempt)      fee key = fund theft.       withdrawal to attacker       withdrawal to attacker      trigger to pre-committed
+                              Hot key alone = liveness    addr.  Watchtower races      addr.  Watchtower races     vault-loop output.
+                              denial only (tocold).       via keyless recovery         via AUTHORIZED recovery     Cannot redirect funds.
+                              Cost: ~164 vB trigger.      (~122 vB).  No escalation    (~246 vB).  Recoveryauth    Grief only.
+                                                          beyond single theft          key provides defense.      Measured: 221 vB trigger.
+                              Measured: 164 vB            Measured: 154 vB trigger     Measured: 292 vB trigger    Verified (exp_cat_csfs_
+                                                                                                                   hot_key_theft)
 
-4   Watchtower exhaustion     N/A (no revault — single    SEVERE — splitting attack    SEVERE — same splitting     H
-    (splitting attack)        unvault of full amount;     via trigger_and_revault      mechanics as CCV, but
-                              watchtower recovers in      creates N Unvaulting          recovery needs the
+4   Watchtower exhaustion     N/A (no revault — single    SEVERE — splitting attack    SEVERE — same splitting     N/A (no revault — single    H
+    (splitting attack)        unvault of full amount;     via trigger_and_revault      mechanics as CCV, but       unvault of full amount,
+                              watchtower recovers in      creates N Unvaulting          recovery needs the         same as CTV).
                               one tx).                    UTXOs.  At high fees,        recoveryauth key.  Same
                                                           dust-sized UTXOs become      economic thresholds,
                                                           uneconomic to recover.       higher per-recovery cost.
-                              N/A                         Measured: trigger=162 vB,    Measured: trigger=292 vB,
+                              N/A                         Measured: trigger=162 vB,    Measured: trigger=292 vB,   N/A
                                                           recover=122 vB               recover=246 vB
 
-5   Trigger key theft         N/A (CTV has hot key, not   N/A (CCV trigger key is      MODERATE — xpub-derived     L
-    (OP_VAULT-specific:       xpub-derived; no revault    a single Schnorr key, not    trigger key hierarchy
-    xpub-derived key,         to amplify attack)          xpub-derived; CCV row is     expands derivation
+5   Trigger key theft         N/A (CTV has hot key, not   N/A (CCV trigger key is      MODERATE — xpub-derived     N/A (CAT+CSFS has single   L
+    (OP_VAULT-specific:       xpub-derived; no revault    a single Schnorr key, not    trigger key hierarchy       Schnorr hot key, not
+    xpub-derived key,         to amplify attack)          xpub-derived; CCV row is     expands derivation          xpub-derived)
     CTV-locked output)                                    in TM3)                      attack surface.  Trigger
                                                                                        output is CTV-locked
                                                                                        (shared with CTV).
                                                                                        Three-key separation
                                                                                        (trigger, recoveryauth,
                                                                                        recovery) is unique.
-                                                          N/A                          Measured: 292 vB trigger
+                                                          N/A                          Measured: 292 vB trigger   N/A
 
-6   Dual-key compromise       HOT+FEE → fund theft       N/A (only one key — trigger  TRIGGER+RECOVERYAUTH →      L, K
-    (trigger + recovery/      (fee key enables pinning    key.  Recovery is keyless,    persistent liveness
-    auth key)                 defense bypass).            so no second key to           denial.  Attacker
-                              HOT alone → liveness only.  compromise.)                 triggers, then front-runs
-                                                                                       watchtower's recovery.
-                              SEVERITY: CRITICAL                                       Funds safe (recovery
-                              (theft possible)            N/A                          addr is pre-committed).
+6   Dual-key compromise       HOT+FEE → fund theft       N/A (only one key — trigger  TRIGGER+RECOVERYAUTH →      HOT+COLD → total theft     L, K, P
+    (trigger + recovery/      (fee key enables pinning    key.  Recovery is keyless,    persistent liveness         (cold key alone is
+    auth key)                 defense bypass).            so no second key to           denial.  Attacker           sufficient — see TM11).
+                              HOT alone → liveness only.  compromise.)                 triggers, then front-runs   Dual compromise is
+                                                                                       watchtower's recovery.     redundant.
+                              SEVERITY: CRITICAL                                       Funds safe (recovery       SEVERITY: CRITICAL
+                              (theft possible)            N/A                          addr is pre-committed).    (theft via cold key alone)
                                                                                        SEVERITY: HIGH (DoS,
                                                                                        not theft).
                                                                                        Combined cost: ~292 vB
                                                                                        trigger + ~246 vB recover
                                                                                        per cycle.
 
-7   Address reuse             CRITICAL — second deposit   SAFE — each funding creates  SAFE — ChainMonitor         B
-    (user/wallet error)       to same CTV address is      an independent contract      rescans for all vault
-                              permanently stuck or        instance.  Multiple          UTXOs at the address.
-                              overpays miners.            deposits to same addr are    Each can be triggered
-                                                          individually spendable.      and recovered normally.
+7   Address reuse             CRITICAL — second deposit   SAFE — each funding creates  SAFE — ChainMonitor         SAFE — each deposit         B
+    (user/wallet error)       to same CTV address is      an independent contract      rescans for all vault       creates a new VaultPlan
+                              permanently stuck or        instance.  Multiple          UTXOs at the address.       from the source coin.
+                              overpays miners.            deposits to same addr are    Each can be triggered       P2TR address is unique
+                                                          individually spendable.      and recovered normally.     per coin/amount.
 
-8   CCV mode bypass           N/A (CTV has no CCV         CRITICAL — undefined CCV     N/A (OP_VAULT uses         G, M
-    (OP_SUCCESS via            opcode; script structure    mode values (3, 4, 7, 128,   OP_VAULT / OP_VAULT_RECOVER
-    undefined CCV flags)       is CTV-only)               255) cause OP_SUCCESS.        opcodes, not CCV)
+8   CCV mode bypass           N/A (CTV has no CCV         CRITICAL — undefined CCV     N/A (OP_VAULT uses         N/A (CAT+CSFS uses         G
+    (OP_SUCCESS via            opcode; script structure    mode values (3, 4, 7, 128,   OP_VAULT / OP_VAULT_RECOVER OP_CAT / OP_CSFS;
+    undefined CCV flags)       is CTV-only)               255) cause OP_SUCCESS.        opcodes, not CCV)          no mode parameter)
                                                           Full covenant bypass: no
                                                           signature, no output
                                                           validation, no amount
@@ -527,25 +632,56 @@ TM  Attack class              CTV                         CCV                   
                                                           vault UTXO → arbitrary
                                                           attacker-controlled
                                                           outputs.
-                              N/A                         Measured: 0 vB marginal      N/A
+                              N/A                         Measured: 0 vB marginal      N/A                        N/A
                                                           (no covenant check occurs)
                                                           Verified (exp_ccv_mode_bypass)
+
+9   Hot key output            N/A (CTV hot key can        N/A (CCV trigger key can     N/A (OP_VAULT trigger key   IMPOSSIBLE — dual CSFS+    M
+    redirection               complete withdrawal to      redirect to arbitrary        can redirect to arbitrary   CHECKSIG verification
+    (CAT+CSFS-specific)       CTV-locked dest)            addr)                        addr, modulo watchtower)    binds output to embedded
+                                                                                                                   sha_single_output.
+                                                                                                                   Hot key can only grief
+                                                                                                                   (trigger to vault-loop).
+                              N/A                         N/A                          N/A                        Measured: 221 vB trigger
+                                                                                                                   Verified (exp_cat_csfs_
+                                                                                                                   hot_key_theft)
+
+10  Witness tampering         N/A (no witness-provided    N/A (CCV checks are          N/A (OP_VAULT checks are    IMPOSSIBLE — any byte      N
+    (CAT+CSFS-specific)       preimage fields)            opcode-level)                opcode-level)               change to prefix/suffix
+                                                                                                                   causes sighash divergence.
+                                                                                                                   3/3 tampering vectors
+                                                                                                                   rejected (nVersion,
+                                                                                                                   codesep_pos, hash_type).
+                              N/A                         N/A                          N/A                        Verified (exp_cat_csfs_
+                                                                                                                   witness_manipulation)
+
+11  Cold key compromise       N/A (CTV cold sweep is      N/A (CCV recovery is         N/A (OP_VAULT recovery      CRITICAL — recover leaf    P
+    (CAT+CSFS-specific:       CTV-constrained to          output-constrained to        is output-constrained       is cold_pk OP_CHECKSIG.
+    unconstrained recovery)   pre-committed tocold)       recover_pk)                  to pre-committed addr)      No covenant, no timelock,
+                                                                                                                   no output restriction.
+                                                                                                                   Cold key = immediate
+                                                                                                                   total theft.
+                              N/A                         N/A                          N/A                        Measured: 125 vB recover
+                                                                                                                   Verified (exp_cat_csfs_
+                                                                                                                   cold_key_recovery)
 ```
 
-**Inverse hierarchies** (from Experiment F):
-- Griefing resistance:   OP_VAULT > CTV > CCV  (OP_VAULT's recoveryauth key blocks unauthorized recovery)
-- Fund safety under key loss: CCV > CTV > OP_VAULT  (CCV's keyless recovery has no key-loss failure mode)
-- These are structural inverses — higher griefing resistance requires a key whose loss is catastrophic.
+**Inverse hierarchies** (from Experiments F, K, P):
+- Griefing resistance:   CAT+CSFS ≈ OP_VAULT > CTV > CCV  (CAT+CSFS requires cold key; OP_VAULT requires recoveryauth key)
+- Fund safety under key loss: CCV > CTV > OP_VAULT > CAT+CSFS  (CAT+CSFS cold key compromise = immediate unrestricted theft)
+- Hot key theft resistance: CAT+CSFS > CTV > CCV ≈ OP_VAULT  (CAT+CSFS hot key cannot redirect; CTV needs fee key too; CCV/OP_VAULT can redirect modulo watchtower)
+- These are structural inverses — stronger output binding (CAT+CSFS) trades flexibility for hot-key safety but exposes cold-key risk.
 
-**Design Space positioning** (from Experiment J):
+**Design Space positioning** (from Experiments J, M–P):
 
-|            | Flexibility | Security           | Complexity |
-|------------|:-----------:|:------------------:|:----------:|
-| CTV        | Low         | High (conditional) | Low        |
-| CCV        | High        | Moderate           | Low        |
-| OP_VAULT   | High        | High               | High       |
+|            | Flexibility | Hot-key safety     | Cold-key safety    | Complexity |
+|------------|:-----------:|:------------------:|:------------------:|:----------:|
+| CTV        | Low         | High (conditional) | High               | Low        |
+| CCV        | High        | Moderate           | High (keyless)     | Low        |
+| OP_VAULT   | High        | High               | High (constrained) | High       |
+| CAT+CSFS   | Low         | Highest            | Low (unconstrained)| Moderate   |
 
-CTV's "conditional" security depends on relay policy (TRUC/v3 would eliminate TM1). CCV's "moderate" reflects keyless griefing (TM2/TM4) and the OP_SUCCESS risk from undefined modes (TM8). OP_VAULT's "high complexity" reflects three-key management and recoveryauth key-loss risk.
+CTV's "conditional" hot-key safety depends on relay policy (TRUC/v3 would eliminate TM1). CCV's "moderate" reflects keyless griefing (TM2/TM4) and the OP_SUCCESS risk from undefined modes (TM8). OP_VAULT's "high complexity" reflects three-key management and recoveryauth key-loss risk. CAT+CSFS's "highest" hot-key safety reflects the dual-verification binding (TM9), but its "low" cold-key safety reflects unconstrained recovery (TM11).
 
 ### 4.2 OP_VAULT Vsize Verification
 
@@ -565,17 +701,22 @@ trigger_and_revault       210 vB       292 vB     +82      watchtower_exhaustion
 
 **Stability verification:** The watchtower_exhaustion experiment verified vsize constancy across 5 consecutive splits: trigger range=0 vB, recover range=0 vB. Vsize is structurally independent of vault balance — linear extrapolation from single-round measurements is valid.
 
-### 4.3 Three-Way Lifecycle Vsize Verification
+### 4.3 Four-Way Lifecycle Vsize Verification
 
-All three covenant lifecycle vsizes verified against regtest measurements (results/2026-02-24_141827/):
+CTV, CCV, and OP_VAULT lifecycle vsizes verified against regtest measurements (results/2026-02-24_141827/). CAT+CSFS trigger, withdraw, and recover vsizes measured in security experiments (results/2026-03-01_143838/); tovault estimated from script structure (P2WPKH → P2TR, not yet measured via lifecycle_costs):
 
 ```
-Covenant   tovault   trigger/unvault   withdraw   total    Script types
-────────   ───────   ───────────────   ────────   ─────    ──────────────────────────
-CTV        122 vB    94 vB             152 vB     368 vB   bare_ctv → bare_ctv → p2wsh (2-out)
-CCV        165 vB    154 vB            111 vB     430 vB   p2tr (2-out) → p2tr → p2tr
-OP_VAULT   154 vB    292 vB            121 vB     567 vB   p2tr (2-out) → p2tr (2-in/3-out) → p2tr_ctv
+Covenant   tovault    trigger/unvault   withdraw   recover   total*   Script types
+────────   ───────    ───────────────   ────────   ───────   ──────   ──────────────────────────
+CTV        122 vB     94 vB             152 vB     —†        368 vB   bare_ctv → bare_ctv → p2wsh (2-out)
+CCV        165 vB     154 vB            111 vB     —†        430 vB   p2tr (2-out) → p2tr → p2tr
+OP_VAULT   154 vB     292 vB            121 vB     246 vB    567 vB   p2tr (2-out) → p2tr (2-in/3-out) → p2tr_ctv
+CAT+CSFS   ~153 vB‡   221 vB            210 vB     125 vB    ~584 vB  p2tr → p2tr_cat_csfs → p2tr_cat_csfs
 ```
+
+\* Total = tovault + trigger + withdraw (happy-path lifecycle). Recovery is a separate path.
+† CTV and CCV recovery uses the cold/keyless path but was not measured separately in lifecycle_costs.
+‡ CAT+CSFS tovault is estimated (~153 vB for P2WPKH → P2TR). Will be verified when lifecycle_costs runs on cat_csfs.
 
 **CTV/CCV corrections (2026-02-24):** The initial fee_sensitivity constants used hand-estimated values (CTV total=426, CCV total=418). The lifecycle_costs measurement showed CTV is actually 58 vB cheaper (368 vs 426) because its bare CTV outputs are more compact than the assumed P2WSH wrapping, and its unvault witness is minimal (94 vs 164). CCV's deposit is 11 vB larger than estimated (165 vs 154) due to the 2-output structure. All fee_sensitivity constants updated to match measured values.
 
@@ -622,12 +763,27 @@ Note: This branch uses the legacy autotools build system (not cmake). Build with
 `arch -x86_64 bash -c './autogen.sh && ./configure --without-miniupnpc && make -j$(nproc)'` (Rosetta on Apple Silicon).
 Binaries are at `src/bitcoind` and `src/bitcoin-cli`.
 
+### 5.4 CATCSFSAdapter
+
+Wraps `simple-cat-csfs-vault/vault.py` via `VaultPlan` and `VaultExecutor`. Key mapping:
+- `create_vault` → `VaultPlan` construction + `executor.create_vault()` (P2WPKH → P2TR)
+- `trigger_unvault` → `executor.trigger_unvault()` (dual CSFS+CHECKSIG signing, SIGHASH_SINGLE|ACP)
+- `complete_withdrawal` → `executor.complete_withdrawal()` (CSV + dual CSFS+CHECKSIG)
+- `recover` → `executor.recover(from_vault=True/False)` (simple cold key CHECKSIG)
+
+Does not support: revault, batched trigger, keyless recovery.
+
+Uses the same Bitcoin Inquisition node as CTVAdapter (`switch-node.sh inquisition`).
+
+Dependencies: `python-bitcoinlib`, `buidl`, `clii` (see `simple-cat-csfs-vault/requirements.txt`).
+
 ## 6. Path Conventions
 
 Adapters resolve external repos relative to the vault-comparison directory:
 - CTV repo: `../../simple-ctv-vault` (relative to adapters/)
 - CCV repo: `../../pymatt` (relative to adapters/)
 - OP_VAULT repo: `../../simple-op-vault` (relative to adapters/)
+- CAT+CSFS repo: `../../simple-cat-csfs-vault` (relative to adapters/)
 
 This means the expected workspace layout is:
 ```
@@ -635,6 +791,7 @@ research experiments/
 ├── simple-ctv-vault/
 ├── pymatt/
 ├── simple-op-vault/
+├── simple-cat-csfs-vault/
 ├── vault-comparison/
 ├── switch-node.sh
 ├── DESIGN.md
@@ -647,12 +804,13 @@ Each adapter requires a specific Bitcoin node variant:
 - CTVAdapter: Bitcoin Inquisition (`switch-node.sh inquisition`)
 - CCVAdapter: Merkleize Bitcoin with CCV (`switch-node.sh ccv`)
 - OPVaultAdapter: jamesob/bitcoin opvault branch (`switch-node.sh opvault`) — autotools build (`src/bitcoind`)
+- CATCSFSAdapter: Bitcoin Inquisition (`switch-node.sh inquisition`) — same node as CTV
 
 The runner switches nodes automatically by default. Use `--no-switch` to skip this if the node is already running.
 
 ## 8. Limitations of This Comparison
 
-This framework compares specific reference implementations — `simple-ctv-vault` for CTV and pymatt's vault example for CCV — on Bitcoin regtest. Several caveats apply:
+This framework compares specific reference implementations — `simple-ctv-vault` for CTV, pymatt's vault example for CCV, `simple-op-vault` for OP_VAULT, and `simple-cat-csfs-vault` for CAT+CSFS — on Bitcoin regtest. Several caveats apply:
 
 **(a) Protocol evolution.** CTV's fee-pinning vulnerability (Experiment D) depends on the current mempool relay policy. The TRUC/v3 transaction proposal (Bitcoin Core PRs #28948, #29496) would restrict descendant chains to one transaction, eliminating the 24-descendant pinning vector demonstrated here. If TRUC is adopted, CTV's worst-case failure mode narrows to hot-key compromise alone. Similarly, address-reuse risk (Experiment B) is mitigable by wallet-layer enforcement of single-use addresses — standard Bitcoin hygiene that vault-aware wallets would be expected to implement.
 
