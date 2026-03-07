@@ -1,7 +1,7 @@
 # ============================================================
 # Bitcoin Covenant Vault Comparison — Multi-stage Docker Build
 # ============================================================
-# Builds all 3 Bitcoin node variants + Python framework in one image.
+# Builds Bitcoin node variants (Inquisition, CCV, OP_VAULT) + Python framework in one image.
 # With BuildKit, stages 2-4 build in parallel.
 # Requires ~8 GB Docker memory (Settings → Resources).
 #

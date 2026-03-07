@@ -181,9 +181,9 @@ The vault uses two Taproot addresses, each with a 2-leaf taptree on a NUMS inter
 
 **CAT+CSFS-specific limitations:**
 
-1. **Cold key is single point of failure** — No timelock, no watchtower window, no pre-committed recovery destination.
+1. **Cold key is single point of failure** — No timelock, no watchtower window, no pre-committed recovery destination. Poelstra's [CAT and Schnorr Tricks II](https://blog.blockstream.com/cat-and-schnorr-tricks-ii/) proposes an alternative: recursive staging resets where the cold key returns funds to the same covenant (liveness battle, not theft). See the `cat_csfs_cold_key_recovery` experiment Phase 5 for the cost model.
 2. **No partial withdrawal** — The entire vault amount flows through trigger → vault-loop → withdraw. No revault/splitting capability.
-3. **Rigid destination** — Changing the withdrawal address requires a full recovery + re-deposit cycle.
+3. **Rigid destination** — Changing the withdrawal address requires a full recovery + re-deposit cycle. Poelstra's design avoids this by encoding the destination in a second output at trigger time, giving the hot key dynamic destination selection (but also a larger attack surface).
 4. **No batched triggers** — Each vault UTXO has its own embedded sha_single_output; cannot batch across vaults.
 
 ## 3. Architecture
@@ -203,19 +203,24 @@ VaultAdapter
 ├── supports_keyless_recovery() → bool
 ├── trigger_revault(vault, amount) → (UnvaultState, VaultState)
 ├── trigger_batched(vaults) → UnvaultState
-└── collect_tx_metrics(record, rpc) → TxMetrics
+├── collect_tx_metrics(record, rpc) → TxMetrics
+├── get_internals() → dict           # Expose internal state for experiments
+└── capabilities() → dict            # Programmatic capability discovery
 ```
 
-Each adapter lazy-loads its vault implementation at `setup()` time, avoiding import-time dependencies on either codebase.
+Each adapter lazy-loads its vault implementation at `setup()` time via `UpstreamModuleLoader` (in `harness/module_loader.py`), which handles `sys.path` manipulation and module cache isolation. CTV and CAT+CSFS adapters share coin pool management via `CoinPool` (in `harness/coin_pool.py`).
+
+Experiments dispatch on adapter capabilities (`supports_batched_trigger()`, `supports_revault()`) rather than adapter names, so adding a fifth adapter requires no experiment modifications — only implementing the abstract interface and declaring capabilities.
 
 ### 3.2 Data Types
 
-- `VaultState` — opaque handle for a funded vault. Carries txid, amount, and adapter-specific `extra` dict.
+- `VaultState` — opaque handle for a funded vault. Carries txid, amount, and adapter-specific `extra` dict. Experiments access internals via `adapter.get_internals()` rather than digging into `extra` directly.
 - `UnvaultState` — handle for an unvaulting UTXO. Carries txid, amount, blocks remaining, and `extra`.
 - `TxRecord` — broadcast transaction receipt. Carries txid, label, raw hex, and amount.
 - `TxMetrics` — per-transaction measurements: vsize, weight, fee, input/output counts, script type, CSV blocks.
 - `ExperimentResult` — collects all observations, tx metrics, and errors for one experiment run on one covenant.
 - `ComparisonResult` — pairs results from two covenants for the same experiment.
+- `ExperimentContext` — (in `experiments/experiment_base.py`) injected state bundle carrying adapter, result, rpc, and params. Provides shared helpers for lifecycle measurement (`create_and_measure_vault`, `trigger_and_measure`, `withdraw_and_measure`, `recover_and_measure`).
 
 ### 3.3 Experiment Registry
 
@@ -793,6 +798,20 @@ research experiments/
 ├── simple-op-vault/
 ├── simple-cat-csfs-vault/
 ├── vault-comparison/
+│   ├── config.py              # FrameworkConfig, FeeConstants, load_config()
+│   ├── config.toml            # Tunable parameters
+│   ├── harness/
+│   │   ├── rpc.py             # RegTestRPC client
+│   │   ├── metrics.py         # ExperimentResult, ComparisonResult, TxMetrics
+│   │   ├── report.py          # JSON + markdown report generation
+│   │   ├── coin_pool.py       # Shared CoinPool for CTV / CAT+CSFS
+│   │   ├── module_loader.py   # UpstreamModuleLoader (sys.path isolation)
+│   │   └── logging.py         # Structured logging (structlog / stdlib)
+│   ├── adapters/
+│   ├── experiments/
+│   │   ├── experiment_base.py # ExperimentContext, shared lifecycle helpers
+│   │   └── registry.py        # @register decorator, experiment discovery
+│   └── tests/                 # pytest unit + integration tests
 ├── switch-node.sh
 ├── DESIGN.md
 └── REFERENCES.md
@@ -827,9 +846,31 @@ To add a new experiment:
 2. Decorate the `run` function with `@register(name=..., tags=[...])`
 3. Add a force-import line in `run.py` so the decorator fires at startup
 4. The experiment receives a fully-set-up `VaultAdapter` with an active RPC connection
+5. Use `ExperimentContext` and shared helpers from `experiment_base.py` to reduce boilerplate
+6. Dispatch on adapter capabilities (`supports_batched_trigger()`, etc.), not adapter names
 
 To add a new covenant adapter:
 1. Subclass `VaultAdapter` in `adapters/<name>_adapter.py`
 2. Implement all abstract methods and relevant optional methods
-3. Add a case to `run.py:get_adapter()`
-4. Document the node requirements and path conventions
+3. Implement `get_internals()` to expose adapter-specific state for experiments
+4. Implement `capabilities()` to declare supported features
+5. Use `UpstreamModuleLoader` from `harness/module_loader.py` for upstream repo imports
+6. Use `CoinPool` from `harness/coin_pool.py` if the upstream uses a CTV-style coin pool
+7. Add a case to `run.py:get_adapter()`
+8. Add fee constants to `config.toml` under `[fees.<name>]`
+9. Document the node requirements and path conventions
+10. Add an integration test class in `tests/test_integration.py`
+
+### 9.1 Testing
+
+The test suite lives in `vault-comparison/tests/`:
+
+- **Unit tests** (`test_lifecycle.py`, `test_harness.py`, `test_registry.py`, `test_config.py`, `test_logging.py`) — run without a Bitcoin node, using `MockAdapter` and `MockRPC` from `conftest.py`. These cover framework correctness: adapter lifecycle, metrics serialization, experiment registry, configuration loading, and structured logging.
+- **Integration tests** (`test_integration.py`) — require a running Bitcoin node. Tagged `@pytest.mark.integration` and skipped by default. Each adapter has a lifecycle test class exercising create→trigger→withdraw and create→trigger→recover paths, plus capability assertions.
+
+Run tests with:
+```bash
+cd vault-comparison
+python -m pytest tests/ -m "not integration" -v    # unit tests only
+python -m pytest tests/ -m integration              # integration tests (need node)
+```

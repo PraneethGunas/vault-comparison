@@ -1,12 +1,12 @@
 # Empirical Comparison of Bitcoin Covenant Vault Designs
 
-Comparative analysis framework for CTV (BIP-119), CCV (BIP-443), and OP_VAULT (BIP-345) vault implementations on Bitcoin regtest.
+Comparative analysis framework for CTV (BIP-119), CCV (BIP-443), OP_VAULT (BIP-345), and CAT+CSFS (BIP-347 + BIP-348) vault implementations on Bitcoin regtest.
 
 ## Overview
 
-This framework runs side-by-side experiments against three covenant vault implementations, measuring transaction costs, security properties, and capability differences. Each experiment produces on-chain measurements from regtest, not simulated or estimated values.
+This framework runs side-by-side experiments against four covenant vault implementations, measuring transaction costs, security properties, and capability differences. Each experiment produces on-chain measurements from regtest, not simulated or estimated values.
 
-The three covenant proposals represent fundamentally different design philosophies for Bitcoin vaults: CTV commits to exact transaction templates at vault creation; CCV enforces contract rules dynamically at spend time; OP_VAULT provides purpose-built vault opcodes with authorized recovery and dynamic withdrawal targets.
+The four covenant proposals represent fundamentally different design philosophies for Bitcoin vaults: CTV commits to exact transaction templates at vault creation; CCV enforces contract rules dynamically at spend time; OP_VAULT provides purpose-built vault opcodes with authorized recovery and dynamic withdrawal targets; CAT+CSFS uses generic stack introspection (OP_CAT) with signature-from-stack verification (OP_CHECKSIGFROMSTACK) to enforce vault transitions via dual-key signing.
 
 ## Repository Layout
 
@@ -15,7 +15,7 @@ research experiments/
 ├── README.md                 # This file
 ├── REFERENCES.md             # Prior art and per-experiment citations
 ├── DESIGN.md                 # Architecture, threat models, experiment catalog
-├── Dockerfile                # Multi-stage build (3 Bitcoin nodes + framework)
+├── Dockerfile                # Multi-stage build (Bitcoin nodes + framework)
 ├── docker-compose.yml        # Single-command experiment runner
 ├── Makefile                  # Build/run/test/analyze shortcuts
 ├── entrypoint.sh             # Docker entrypoint with --help
@@ -24,21 +24,25 @@ research experiments/
 │   ├── run.py                # CLI runner
 │   ├── run_full.sh           # Full pipeline (run all → analyze)
 │   ├── analyze_results.py    # Consolidated report generator
-│   ├── harness/              # Shared infra (RPC, metrics, reporting)
-│   ├── adapters/             # Vault drivers (CTV, CCV, OP_VAULT)
-│   ├── experiments/          # Experiment modules (12 experiments)
+│   ├── config.py             # Centralized configuration (FeeConstants, FrameworkConfig)
+│   ├── config.toml           # Tunable parameters (fee rates, paths, delays)
+│   ├── harness/              # Shared infra (RPC, metrics, reporting, logging, coin pool)
+│   ├── adapters/             # Vault drivers (CTV, CCV, OP_VAULT, CAT+CSFS)
+│   ├── experiments/          # Experiment modules (16 experiments)
+│   ├── tests/                # Unit tests (pytest) and integration tests
 │   └── results/              # Timestamped output (gitignored)
 ├── formalization/             # Alloy models for covenant properties
 │   └── alloy/                # .als specs per covenant + cross-covenant
 ├── site/                     # Interactive research site (separate repo)
 ├── simple-ctv-vault/         # CTV vault (upstream clone)
+├── simple-cat-csfs-vault/    # CAT+CSFS vault (custom implementation)
 ├── pymatt/                   # CCV vault (upstream clone)
 └── simple-op-vault/          # OP_VAULT demo (upstream clone)
 ```
 
 ## Quick Start (Docker)
 
-The fastest way to run everything. Builds all three Bitcoin nodes and the Python framework in a single image.
+The fastest way to run everything. Builds the Bitcoin nodes and the Python framework in a single image.
 
 ```bash
 # Build (~45 min first time, cached after that)
@@ -89,7 +93,7 @@ pip install -r simple-op-vault/requirements.txt
 
 ### Node Requirements
 
-Each adapter requires a specific Bitcoin node variant. Clone and build all three:
+Each adapter requires a specific Bitcoin node variant. CTV and CAT+CSFS share Bitcoin Inquisition; CCV and OP_VAULT each need their own. Clone and build:
 
 ```bash
 # CTV — Bitcoin Inquisition
@@ -128,7 +132,7 @@ uv run run.py run lifecycle_costs --covenant ctv
 uv run run.py run lifecycle_costs --covenant ccv
 uv run run.py run lifecycle_costs --covenant opvault
 
-# Run on all three covenants (CTV → CCV → OP_VAULT)
+# Run on all covenants (CTV → CCV → OP_VAULT → CAT+CSFS)
 uv run run.py run lifecycle_costs --covenant all
 
 # Run all core experiments across all covenants
@@ -143,7 +147,7 @@ uv run run.py compare results/<timestamp_directory>
 
 ## Experiments
 
-The framework includes 12 experiments organized by scope category.
+The framework includes 16 experiments organized by scope category.
 
 ### Category Taxonomy
 
@@ -156,28 +160,34 @@ The framework includes 12 experiments organized by scope category.
 
 | # | Name | Covenants | Category | Description |
 |---|------|-----------|----------|-------------|
-| A | `lifecycle_costs` | CTV, CCV, OPV | Comparative | Full vault lifecycle transaction sizes and fees |
-| B | `address_reuse` | CTV, CCV, OPV | Comparative | Second-deposit safety: stuck funds (CTV) vs safe re-funding (CCV, OPV) |
-| C | `fee_pinning` | CTV, CCV, OPV | Comparative | Fee mechanism and descendant-chain pinning surface |
-| D | `recovery_griefing` | CTV, CCV, OPV | Comparative | Forced-recovery griefing: three-way asymmetric cost analysis |
+| A | `lifecycle_costs` | CTV, CCV, OPV, CAT | Comparative | Full vault lifecycle transaction sizes and fees |
+| B | `address_reuse` | CTV, CCV, OPV, CAT | Comparative | Second-deposit safety: stuck funds (CTV) vs safe re-funding (CCV, OPV, CAT) |
+| C | `fee_pinning` | CTV, CCV, OPV, CAT | Comparative | Fee mechanism and descendant-chain pinning surface |
+| D | `recovery_griefing` | CTV, CCV, OPV, CAT | Comparative | Forced-recovery griefing: four-way asymmetric cost analysis |
 | E | `revault_amplification` | CCV, OPV | Capability gap | Partial withdrawal chaining and cost accumulation |
-| F | `multi_input` | CTV, CCV, OPV | Capability gap | Batched trigger efficiency and cross-input accounting |
+| F | `multi_input` | CTV, CCV, OPV, CAT | Capability gap | Batched trigger efficiency and cross-input accounting |
 | G | `ccv_edge_cases` | CCV | CCV-only | Mode confusion, keypath bypass, sentinel values |
 | H | `watchtower_exhaustion` | CCV, OPV | Security | Revault-splitting watchtower fee exhaustion attack |
-| I | `fee_sensitivity` | All (analytical) | Analytical | Three-way fee environment sensitivity projections |
+| I | `fee_sensitivity` | All (analytical) | Analytical | Four-way fee environment sensitivity projections |
 | J | `opvault_recovery_auth` | OPV | OP_VAULT-specific | Authorized recovery as defense and attack surface |
 | K | `opvault_trigger_key_theft` | OPV | OP_VAULT-specific | Trigger key theft: attacker vs watchtower recovery race |
-| M | `ccv_mode_bypass` | CCV | CCV-only | Production-shaped vault UTXO theft via OP_SUCCESS on undefined CCV modes |
+| L | `ccv_mode_bypass` | CCV | CCV-only | Production-shaped vault UTXO theft via OP_SUCCESS on undefined CCV modes |
+| M | `cat_csfs_hot_key_theft` | CAT | CAT+CSFS-only | Hot key compromise: griefing-only, no theft path |
+| N | `cat_csfs_witness_manipulation` | CAT | CAT+CSFS-only | Witness tampering against OP_CAT+CSFS introspection |
+| O | `cat_csfs_destination_lock` | CAT | CAT+CSFS-only | Destination address locking via embedded commitments |
+| P | `cat_csfs_cold_key_recovery` | CAT | CAT+CSFS-only | Unconstrained cold key recovery: defense and risk |
 
 ### Key Security Findings
 
-The three-way comparison reveals a distinct vulnerability profile for each covenant:
+The four-way comparison reveals a distinct vulnerability profile for each covenant:
 
 **CTV** — Hot key compromise leads to fund theft (delayed by timelock). Fee pinning via anchor outputs. No revault means no splitting attacks. Address reuse causes permanent fund loss.
 
 **CCV** — Keyless recovery griefing (anyone can force-recover, lowest attacker bar). Watchtower fee exhaustion via revault splitting. No fee pinning (no anchor outputs). Safe address reuse. **Critical: undefined CCV mode values (TM8) cause OP_SUCCESS — complete covenant bypass, full vault theft with no signature required.**
 
 **OP_VAULT** — Authorized recovery blocks keyless griefing (requires recoveryauth key). Same revault-splitting vulnerability as CCV. Fee-input model eliminates pinning. Safe address reuse. Trigger key theft mitigated by watchtower + authorized recovery race.
+
+**CAT+CSFS** — Strongest hot-key theft resistance (griefing-only, no theft path — attacker can trigger but not redirect funds). Weakest cold-key recovery safety (unconstrained OP_CHECKSIG allows sweeping to any destination). No revault or batched triggers. Fee management via anchor outputs (similar pinning surface to CTV). Safe address reuse.
 
 ### Running by Category
 
@@ -210,16 +220,36 @@ uv run run.py run --all --covenant all
 
 Each adapter exposes the vault lifecycle through a common interface. Some capabilities are covenant-specific:
 
-| Capability | CTV | CCV | OP_VAULT |
-|-----------|-----|-----|----------|
-| `create_vault()` | Yes | Yes | Yes |
-| `trigger_unvault()` | Yes | Yes | Yes |
-| `complete_withdrawal()` | Yes | Yes | Yes |
-| `trigger_recovery()` | Yes | Yes | Yes (authorized) |
-| `trigger_revault()` | No | Yes | Yes |
-| `trigger_batched()` | No | Yes | Yes |
-| Address reuse safe | No | Yes | Yes |
-| Fee mechanism | Anchor output | No anchors | Fee input |
+| Capability | CTV | CCV | OP_VAULT | CAT+CSFS |
+|-----------|-----|-----|----------|----------|
+| `create_vault()` | Yes | Yes | Yes | Yes |
+| `trigger_unvault()` | Yes | Yes | Yes | Yes |
+| `complete_withdrawal()` | Yes | Yes | Yes | Yes |
+| `recover()` | Yes | Yes (keyless) | Yes (authorized) | Yes (cold key) |
+| `supports_revault()` | No | Yes | Yes | No |
+| `supports_batched_trigger()` | No | Yes | Yes | No |
+| `supports_keyless_recovery()` | No | Yes | No | No |
+| Address reuse safe | No | Yes | Yes | Yes |
+| Fee mechanism | Anchor output | No anchors | Fee input | Anchor output |
+
+## Testing
+
+The framework includes unit tests (no node required) and integration tests (require a running Bitcoin node).
+
+```bash
+cd vault-comparison
+
+# Run all unit tests
+python -m pytest tests/ -m "not integration"
+
+# Run integration tests (requires running node of the appropriate type)
+python -m pytest tests/ -m integration
+
+# Verbose output
+python -m pytest tests/ -m "not integration" -v
+```
+
+Unit tests cover the harness (metrics, reporting), adapter lifecycle (via MockAdapter), experiment registry, configuration loading, and structured logging. Integration tests exercise the full create→trigger→withdraw→recover lifecycle against each real adapter.
 
 ## Analysis Pipeline
 
