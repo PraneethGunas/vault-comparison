@@ -230,7 +230,18 @@ class CCVAdapter(VaultAdapter):
             amount_sats=amount,
         )
 
-    # ── Capabilities ─────────────────────────────────────────────────
+    # ── Internals & Capabilities ────────────────────────────────────
+
+    def get_internals(self) -> dict:
+        return {
+            "pymatt_rpc": self._pymatt_rpc,
+            "manager": self._manager,
+            "vault_contract": self.vault_contract,
+            "unvaulting_contract": self.unvaulting_contract,
+            "unvault_priv_key": self.unvault_priv_key,
+            "recover_priv_key": self.recover_priv_key,
+            "mods": self._mods,
+        }
 
     def supports_revault(self) -> bool:
         return True

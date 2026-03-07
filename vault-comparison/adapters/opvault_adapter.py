@@ -26,8 +26,6 @@ from harness.metrics import TxMetrics
 # Path to the cloned opvault-demo repo (sibling to vault-comparison/)
 OPVAULT_REPO = Path(__file__).resolve().parents[2] / "simple-op-vault"
 
-# Counter for generating unique seeds per vault instance
-_vault_counter = 0
 
 
 def _ensure_opvault_imports():
@@ -109,6 +107,7 @@ class OPVaultAdapter(VaultAdapter):
         self.rpc = rpc
         self.block_delay = block_delay
         self.seed = seed
+        self._vault_counter = 0
         self.ov = _ensure_opvault_imports()
 
         # The upstream RPC (verystable.rpc.BitcoinRPC) — supports cookie auth
@@ -232,7 +231,7 @@ class OPVaultAdapter(VaultAdapter):
         )
 
         # Save config to temp file (required by upstream load())
-        config_path = self._workdir / f"config-{_vault_counter}.json"
+        config_path = self._workdir / f"config-{self._vault_counter}.json"
         metadata = self.ov.WalletMetadata(
             config,
             filepath=config_path,
@@ -241,7 +240,7 @@ class OPVaultAdapter(VaultAdapter):
         metadata.save()
 
         # Save secrets
-        secrets_path = self._workdir / f"secrets-{_vault_counter}.json"
+        secrets_path = self._workdir / f"secrets-{self._vault_counter}.json"
         secd = {
             config.id: {
                 'trigger_xpriv': trig32.get_xpriv(),
@@ -263,10 +262,9 @@ class OPVaultAdapter(VaultAdapter):
         Creates a fresh config, mines coins to the vault deposit address,
         then returns a VaultState handle.
         """
-        global _vault_counter
-        _vault_counter += 1
+        self._vault_counter += 1
 
-        vault_seed = self.seed + f"-vault-{_vault_counter}".encode()
+        vault_seed = self.seed + f"-vault-{self._vault_counter}".encode()
         metadata = self._create_config(vault_seed)
         config = metadata.config
 
@@ -551,8 +549,16 @@ class OPVaultAdapter(VaultAdapter):
         )
 
     # ------------------------------------------------------------------
-    # Capabilities
+    # Internals & Capabilities
     # ------------------------------------------------------------------
+
+    def get_internals(self) -> dict:
+        return {
+            "opvault_rpc": self._ov_rpc,
+            "opvault_main": self.ov,
+            "fee_wallet": self._fee_wallet,
+            "workdir": self._workdir,
+        }
 
     def supports_revault(self) -> bool:
         """OP_VAULT supports partial withdrawal with revault.

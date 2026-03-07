@@ -47,7 +47,7 @@ class VaultAdapter(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Short identifier: 'ctv', 'ccv', 'opvault'."""
+        """Short identifier: 'ctv', 'ccv', 'opvault', 'cat_csfs'."""
         ...
 
     @property
@@ -147,6 +147,31 @@ class VaultAdapter(ABC):
                       This is OP_VAULT's anti-griefing design.
         """
         ...
+
+    # ── Internals & Capabilities ────────────────────────────────────
+
+    def get_internals(self) -> dict:
+        """Expose adapter-specific internals for covenant-specific experiments.
+
+        Returns a dict of internal objects (plans, executors, RPC clients,
+        contract instances) that covenant-specific experiments need.
+
+        Cross-adapter experiments MUST NOT call this method. Only experiments
+        tagged with a specific covenant should use it.
+
+        Convention: keys use the adapter's naming scheme, not a generic one.
+        """
+        return {}
+
+    def capabilities(self) -> dict:
+        """Programmatic capability discovery for experiments and agents."""
+        return {
+            "revault": self.supports_revault(),
+            "batched_trigger": self.supports_batched_trigger(),
+            "keyless_recovery": self.supports_keyless_recovery(),
+            "max_batch_size": None,
+            "recovery_requires_key": not self.supports_keyless_recovery(),
+        }
 
     # ── Capabilities ─────────────────────────────────────────────────
 
