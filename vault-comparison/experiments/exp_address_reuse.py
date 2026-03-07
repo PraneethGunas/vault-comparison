@@ -358,7 +358,7 @@ def _test_opvault_address_reuse(adapter, result):
     )
 
     result.observe(
-        "THREE-WAY COMPARISON:"
+        "FOUR-WAY COMPARISON:"
     )
     result.observe(
         "  CTV:      Single-use — second deposit creates unspendable UTXO (fund loss)"
@@ -370,11 +370,14 @@ def _test_opvault_address_reuse(adapter, result):
         "  OP_VAULT: Safe — independent UTXOs tracked by ChainMonitor"
     )
     result.observe(
-        "  Privacy note: All three designs use the same address for a given "
-        "  vault config.  OP_VAULT and CCV both allow address reuse without "
-        "  fund loss, but repeated deposits to the same address are a privacy "
-        "  concern (links deposits on-chain).  CTV's forced single-use is "
-        "  actually better for privacy, though at the cost of stuck funds."
+        "  CAT+CSFS: Single-use — similar to CTV; tapscript commits to specific UTXO state"
+    )
+    result.observe(
+        "  Privacy note: All four designs use the same address for a given "
+        "  vault config.  OP_VAULT, CCV, and CAT+CSFS all allow address reuse "
+        "  without fund loss, but repeated deposits to the same address are a "
+        "  privacy concern (links deposits on-chain).  CTV's forced single-use "
+        "  is actually better for privacy, though at the cost of stuck funds."
     )
 
 

@@ -134,14 +134,29 @@ def _ceiling_analysis(result, vault_counts, vsize_by_n, weight_by_n, covenant):
             )
 
 
-def _sweep_ctv(adapter, result, rpc, vault_counts):
-    """CTV: no batched trigger — measure individual trigger cost at each N.
+def _sweep_linear(adapter, result, rpc, vault_counts):
+    """Sweep for adapters without native batching (CTV, CAT+CSFS).
 
-    Since CTV can't batch, the total vsize for N vaults is simply N × single.
-    We measure the single-trigger vsize and extrapolate, recording a data
-    point for each N in vault_counts.
+    Since these can't batch, total vsize for N vaults = N × single_trigger_cost.
+    We measure the single-trigger vsize and extrapolate.
     """
-    result.observe("--- CTV batching sweep (individual triggers only) ---")
+    covenant = adapter.name
+    result.observe(f"--- {covenant.upper()} batching sweep (individual triggers only) ---")
+
+    # Per-covenant explanation of WHY batching isn't possible
+    BATCHING_NOTES = {
+        "ctv": (
+            "CTV commits to input count and index — batching requires foreknowledge "
+            "of the exact batch composition at vault creation time. "
+            "Total cost scales linearly: N × single_trigger_cost."
+        ),
+        "cat_csfs": (
+            "CAT+CSFS commits via CSFS signature verification against a specific "
+            "sighash preimage.  Each vault's trigger requires its own signature — "
+            "batching requires N independent signatures and N independent covenant "
+            "script executions.  Total cost scales linearly: N × single_trigger_cost."
+        ),
+    }
 
     # Measure single-trigger vsize
     v = adapter.create_vault(VAULT_AMOUNT)
@@ -154,67 +169,7 @@ def _sweep_ctv(adapter, result, rpc, vault_counts):
     single_fee = single_metrics.fee_sats
 
     result.observe(f"Single trigger baseline: vsize={single_vsize}, fee={single_fee} sats")
-    result.observe(
-        "CTV commits to input count and index — batching requires foreknowledge "
-        "of the exact batch composition at vault creation time. "
-        "Total cost scales linearly: N × single_trigger_cost."
-    )
-
-    # Record extrapolated data points
-    from harness.metrics import TxMetrics
-    vsize_by_n = {}
-    weight_by_n = {}
-    for n in vault_counts:
-        total_vsize = single_vsize * n
-        total_weight = single_weight * n
-        vsize_by_n[n] = total_vsize
-        weight_by_n[n] = total_weight
-        result.add_tx(TxMetrics(
-            label=f"batch_{n}_total",
-            vsize=total_vsize,
-            weight=total_weight,
-            fee_sats=single_fee * n,
-            num_inputs=n,
-            num_outputs=n,  # each trigger produces its own unvault output
-        ))
-        result.observe(
-            f"  N={n}: total_vsize={total_vsize} "
-            f"(= {n} × {single_vsize}), fee={single_fee * n} sats"
-        )
-
-    # Ceiling analysis
-    _ceiling_analysis(result, vault_counts, vsize_by_n, weight_by_n, "ctv")
-
-
-def _sweep_cat_csfs(adapter, result, rpc, vault_counts):
-    """CAT+CSFS: no batched trigger — identical to CTV's limitation.
-
-    Each vault UTXO has its own tapscript with covenant verification.
-    The CSFS signature commits to specific input/output structure.
-    Batching would require all N vaults to share a single sighash preimage
-    covering N inputs — not possible with the current design.
-
-    Like CTV, total vsize for N vaults = N × single_trigger_cost.
-    """
-    result.observe("--- CAT+CSFS batching sweep (individual triggers only) ---")
-
-    # Measure single-trigger vsize
-    v = adapter.create_vault(VAULT_AMOUNT)
-    uv = adapter.trigger_unvault(v)
-    info = rpc.get_tx_info(uv.unvault_txid)
-    single_vsize = info.get("vsize", 0)
-    single_weight = info.get("weight", 0)
-    w = adapter.complete_withdrawal(uv)
-    single_metrics = adapter.collect_tx_metrics(w, rpc)
-    single_fee = single_metrics.fee_sats
-
-    result.observe(f"Single trigger baseline: vsize={single_vsize}, fee={single_fee} sats")
-    result.observe(
-        "CAT+CSFS commits via CSFS signature verification against a specific "
-        "sighash preimage.  Each vault's trigger requires its own signature — "
-        "batching requires N independent signatures and N independent covenant "
-        "script executions.  Total cost scales linearly: N × single_trigger_cost."
-    )
+    result.observe(BATCHING_NOTES.get(covenant, BATCHING_NOTES["ctv"]))
 
     # Record extrapolated data points
     from harness.metrics import TxMetrics
@@ -238,26 +193,23 @@ def _sweep_cat_csfs(adapter, result, rpc, vault_counts):
             f"(= {n} × {single_vsize}), fee={single_fee * n} sats"
         )
 
-    # Ceiling analysis
-    _ceiling_analysis(result, vault_counts, vsize_by_n, weight_by_n, "cat_csfs")
+    _ceiling_analysis(result, vault_counts, vsize_by_n, weight_by_n, covenant)
 
     result.observe(
-        "COMPARISON: Both CTV and CAT+CSFS lack native batching.  CCV and "
+        "COMPARISON: CTV and CAT+CSFS lack native batching.  CCV and "
         "OP_VAULT can batch N vault triggers into a single transaction, "
-        "achieving sub-linear scaling.  The per-vault overhead difference "
-        "between CTV and CAT+CSFS depends on witness sizes — CAT+CSFS "
-        "triggers are larger due to the CSFS witness (sighash preimage + "
-        "dual signatures) vs CTV's minimal witness (just the CTV hash)."
+        "achieving sub-linear scaling."
     )
 
 
-def _sweep_ccv(adapter, result, rpc, vault_counts):
-    """CCV: measure actual batched trigger cost at each N.
+def _sweep_batched(adapter, result, rpc, vault_counts):
+    """Sweep for adapters with native batching (CCV, OP_VAULT).
 
     Creates N vaults and triggers them in a single transaction,
     recording the real vsize at each batch size.
     """
-    result.observe("--- CCV batching sweep (real batched triggers) ---")
+    covenant = adapter.name
+    result.observe(f"--- {covenant.upper()} batching sweep (real batched triggers) ---")
 
     from harness.metrics import TxMetrics
 
@@ -274,10 +226,8 @@ def _sweep_ccv(adapter, result, rpc, vault_counts):
             vaults = [adapter.create_vault(VAULT_AMOUNT) for _ in range(n)]
 
             if n == 1:
-                # Single vault: regular trigger
                 uv = adapter.trigger_unvault(vaults[0])
             else:
-                # Batched trigger
                 uv = adapter.trigger_batched(vaults)
 
             info = rpc.get_tx_info(uv.unvault_txid)
@@ -286,7 +236,6 @@ def _sweep_ccv(adapter, result, rpc, vault_counts):
             vsize_by_n[n] = total_vsize
             weight_by_n[n] = total_weight
 
-            # Complete withdrawal to get fee info
             w = adapter.complete_withdrawal(uv)
             wm = adapter.collect_tx_metrics(w, rpc)
 
@@ -297,7 +246,7 @@ def _sweep_ccv(adapter, result, rpc, vault_counts):
                 weight=total_weight,
                 fee_sats=wm.fee_sats,
                 num_inputs=n,
-                num_outputs=info.get("vout_count", 0),
+                num_outputs=len(info.get("vout", [])),
             ))
 
             per_vault = total_vsize / n if n > 0 else 0
@@ -306,7 +255,6 @@ def _sweep_ccv(adapter, result, rpc, vault_counts):
                 f"per_vault={per_vault:.1f} vB, fee={wm.fee_sats} sats"
             )
 
-            # Check if we're approaching standardness limit
             if total_weight > 400_000:
                 result.observe(
                     f"  WARNING: N={n} exceeds standardness limit "
@@ -323,118 +271,27 @@ def _sweep_ccv(adapter, result, rpc, vault_counts):
                     f"  CEILING DETECTED at N={n}: transaction exceeds size limits."
                 )
 
-    # Ceiling analysis
-    _ceiling_analysis(result, vault_counts, vsize_by_n, weight_by_n, "ccv")
+    _ceiling_analysis(result, vault_counts, vsize_by_n, weight_by_n, covenant)
 
-    # --- Phase 3: Cross-input DEDUCT failure demonstration ---
-    # Replicates pymatt's cross_input_accounting_attack.py.
-    #
-    # The trigger_and_revault clause uses CCV_FLAG_DEDUCT_OUTPUT_AMOUNT,
-    # which subtracts the designated output amount from the input's value
-    # when computing the expected CCV output amount.  This is evaluated
-    # PER-INPUT — it is NOT a global accumulator across all inputs.
-    #
-    # A naive coordinator that treats the revault output as a single
-    # shared deduction point for multiple inputs will produce a tx where
-    # CCV amount checks fail, because each input independently expects
-    # its own deduction to be reflected in the output amount.
-    result.observe("--- Phase 3: Cross-input DEDUCT failure demo ---")
-
-    _run_deduct_demo(adapter, result)
-
-
-def _sweep_opvault(adapter, result, rpc, vault_counts):
-    """OP_VAULT: measure batched trigger cost at each N.
-
-    OP_VAULT's start_withdrawal() accepts multiple VaultUtxo objects,
-    combining them into a single trigger transaction.  This is similar
-    to CCV batching but uses OP_VAULT's specific script structure.
-    """
-    result.observe("--- OP_VAULT batching sweep (real batched triggers) ---")
-
-    from harness.metrics import TxMetrics
-
-    vsize_by_n = {}
-    weight_by_n = {}
-    hit_ceiling = False
-
-    for n in vault_counts:
-        if hit_ceiling:
-            result.observe(f"  N={n}: SKIPPED — previous batch hit tx size limit")
-            continue
-
-        try:
-            vaults = [adapter.create_vault(VAULT_AMOUNT) for _ in range(n)]
-
-            if n == 1:
-                uv = adapter.trigger_unvault(vaults[0])
-            else:
-                uv = adapter.trigger_batched(vaults)
-
-            info = rpc.get_tx_info(uv.unvault_txid)
-            total_vsize = info.get("vsize", 0)
-            total_weight = info.get("weight", 0)
-            vsize_by_n[n] = total_vsize
-            weight_by_n[n] = total_weight
-
-            # Complete withdrawal to get fee info
-            w = adapter.complete_withdrawal(uv)
-            wm = adapter.collect_tx_metrics(w, rpc)
-
-            result.add_tx(TxMetrics(
-                label=f"batch_{n}_total",
-                txid=uv.unvault_txid,
-                vsize=total_vsize,
-                weight=total_weight,
-                fee_sats=wm.fee_sats,
-                num_inputs=n,
-                num_outputs=info.get("vout_count", len(info.get("vout", []))),
-            ))
-
-            per_vault = total_vsize / n if n > 0 else 0
-            result.observe(
-                f"  N={n}: total_vsize={total_vsize}, weight={total_weight}, "
-                f"per_vault={per_vault:.1f} vB, fee={wm.fee_sats} sats"
-            )
-
-            if total_weight > 400_000:
-                result.observe(
-                    f"  WARNING: N={n} exceeds standardness limit "
-                    f"({total_weight:,} > 400,000 WU)"
-                )
-                hit_ceiling = True
-
-        except Exception as e:
-            err_str = str(e)
-            result.observe(f"  N={n}: FAILED — {err_str[:150]}")
-            if "tx-size" in err_str or "too large" in err_str.lower():
-                hit_ceiling = True
-
-    _ceiling_analysis(result, vault_counts, vsize_by_n, weight_by_n, "opvault")
-
-    # OP_VAULT comparison notes
-    result.observe("\n--- OP_VAULT batching comparison ---")
     result.observe(
-        "OP_VAULT batching uses start_withdrawal() with multiple VaultUtxo "
-        "inputs.  Unlike CCV, there is no DEDUCT mode footgun — OP_VAULT's "
-        "opcode semantics handle revault accounting internally."
+        f"\n--- {covenant.upper()} batching comparison ---"
     )
     result.observe(
-        "THREE-WAY BATCHING COMPARISON:"
+        "FOUR-WAY BATCHING COMPARISON:"
     )
     result.observe(
-        "  CTV:      No batching — each vault UTXO needs its own trigger tx.  "
-        "            CTV commits to input count/index at creation time."
+        "  CTV:      No batching — each vault UTXO needs its own trigger tx."
     )
     result.observe(
         "  CCV:      Batching supported — multiple inputs in one trigger.  "
-        "            DEDUCT mode footgun: multiple DEDUCT inputs sharing one "
-        "            revault output → silent failure.  Coordinator complexity."
+        "            DEDUCT mode footgun with multiple inputs."
     )
     result.observe(
         "  OP_VAULT: Batching supported — multiple VaultUtxos in one trigger.  "
-        "            No DEDUCT footgun.  Automatic revault for excess amount.  "
-        "            Simpler coordinator logic than CCV."
+        "            No DEDUCT footgun.  Automatic revault for excess."
+    )
+    result.observe(
+        "  CAT+CSFS: No batching — each vault needs its own CSFS verification."
     )
 
 
@@ -642,19 +499,14 @@ def run(adapter: VaultAdapter) -> ExperimentResult:
     rpc = adapter.rpc
 
     try:
-        if adapter.name == "ctv":
-            _sweep_ctv(adapter, result, rpc, vault_counts)
-        elif adapter.name == "ccv":
-            _sweep_ccv(adapter, result, rpc, vault_counts)
-            # Run DEDUCT demo only once (not part of sweep)
-            result.observe("")
-            _run_deduct_demo(adapter, result)
-        elif adapter.name == "opvault":
-            _sweep_opvault(adapter, result, rpc, vault_counts)
-        elif adapter.name == "cat_csfs":
-            _sweep_cat_csfs(adapter, result, rpc, vault_counts)
+        if adapter.supports_batched_trigger():
+            _sweep_batched(adapter, result, rpc, vault_counts)
+            # CCV-specific: DEDUCT failure demo
+            if adapter.name == "ccv":
+                result.observe("")
+                _run_deduct_demo(adapter, result)
         else:
-            result.observe(f"No multi-input test for {adapter.name}")
+            _sweep_linear(adapter, result, rpc, vault_counts)
     except Exception as e:
         result.error = str(e)
         result.observe(f"FAILED: {e}")
