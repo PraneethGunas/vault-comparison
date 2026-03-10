@@ -19,7 +19,7 @@ The most comprehensive prior security analysis of vault protocols. Defines the d
 Jacob Tyge Göker Swambo. "Evolving Bitcoin Custody." PhD thesis, King's College London, Department of Informatics, December 2022.
 arXiv: [2310.11911](https://arxiv.org/abs/2310.11911)
 
-Proposes the Ajolote autonomous custody system with formal security analysis of deleted-key covenants. The formal treatment of vault state transitions and adversarial models provides a theoretical foundation relevant to CTV's design constraints.
+Proposes the Ajolote autonomous custody system with formal security analysis of deleted-key covenants. The formal treatment of vault state transitions and adversarial models provides a theoretical foundation relevant to CTV's design constraints. Swambo [Swa23] analyzes deleted-key covenants formally; our framework extends the analysis to active-key covenant designs (CCV, OP_VAULT, CAT+CSFS) across four implementations with empirical measurements.
 
 ### [OS23] O'Beirne, Sanders — BIP-345 (OP_VAULT)
 James O'Beirne, Greg Sanders. "BIP-345: OP_VAULT." Bitcoin Improvement Proposal, February 2023. Status: Withdrawn, superseded by BIP-443.
@@ -64,14 +64,54 @@ BIP text: https://bips.dev/348/
 
 Formalizes OP_CHECKSIGFROMSTACK for Tapscript, enabling verification of Schnorr signatures against arbitrary messages on the stack. Combined with OP_CAT (BIP-347), enables the dual-verification pattern used in our CAT+CSFS vault: the same signature is checked by CSFS (against a stack-assembled sighash preimage) and CHECKSIG (against the real transaction sighash), proving that the witness-provided preimage data matches the actual transaction.
 
+### [Rij24] Rijndael — "Basic vault prototype using OP_CAT"
+Rijndael. "Basic vault prototype using OP_CAT." Delving Bitcoin, February 2024.
+URL: https://delvingbitcoin.org/t/basic-vault-prototype-using-op-cat/576
+GitHub: https://github.com/taproot-wizards/purrfect_vault
+Covered in: Bitcoin Optech Newsletter #291, February 28, 2024.
+
+A Rust proof-of-concept vault implementation using only OP_CAT (BIP-347) and existing consensus rules — no OP_CHECKSIGFROMSTACK required. Uses the Schnorr discrete-log trick (forcing pubkey and nonce to generator G) described by Poelstra [Poe21] to emulate CSFS, achieving transaction introspection with a single opcode. The vault enforces amount preservation (trigger output matches input), relative timelocks (contest period), and destination locking (withdrawal address fixed at trigger time). Our CAT+CSFS vault differs by using real CSFS (BIP-348) instead of the G-trick, which simplifies the witness structure and avoids the requirement that the signing key be the generator, at the cost of requiring a second soft fork (BIP-348 in addition to BIP-347).
+
 ### Additional references
 
 **Bitcoin Optech Newsletter.** Multiple editions covering CPFP carve-out, package relay, v3/TRUC transactions, and OP_VAULT analysis. Cite specific editions for fee pinning context.
 URL: https://bitcoinops.org/en/newsletters/
 
-**Antoine Riard.** Pinning attack analysis in the Lightning Network context, relevant to the fee pinning methodology applied here to CTV vaults.
+**[Ria23] Antoine Riard — "Replacement Cycling Attacks on Lightning Network."** Full Disclosure, bitcoin-dev mailing list, October 2023. Demonstrates that an attacker can use transaction replacement to cycle out a victim's time-sensitive HTLC-timeout transaction from the mempool, enabling fund theft.  While the specific mechanics target Lightning HTLCs (not CTV vault anchors), the underlying class of attack — manipulating mempool relay policy to prevent confirmation of time-critical transactions — is shared with the descendant-chain pinning demonstrated in experiment D.
 
 **Gloria Zhao.** Package relay and v3/TRUC transaction proposals (Bitcoin Core PRs [#28948](https://github.com/bitcoin/bitcoin/pull/28948), [#29496](https://github.com/bitcoin/bitcoin/pull/29496)). TRUC adoption would eliminate the descendant-chain pinning vector demonstrated in experiment D.
+
+**[WD24] Pieter Wuille, Suhas Daftuar — Cluster Mempool.** Bitcoin Core project, 2024-2025. Replaces per-transaction ancestor/descendant limits with cluster-based mempool evaluation.  Relevant to experiment D (fee pinning): the 25-descendant limit exploited by the pinning attack may change under cluster mempool's different eviction and relay logic.  See Bitcoin Optech topic page: https://bitcoinops.org/en/topics/cluster-mempool/. The cluster mempool redesign is ongoing as of 2026; its impact on CTV vault pinning is a forward-looking consideration.
+
+### [OB25] O'Beirne — "Withdrawing OP_VAULT (BIP-345)"
+James O'Beirne. "Withdrawing OP_VAULT (BIP-345)." Delving Bitcoin, 2025.
+URL: https://delvingbitcoin.org/t/withdrawing-op-vault-bip-345/1670
+
+Confirms OP_VAULT (BIP-345) was withdrawn in favor of CCV (BIP-443). Relevant context for why both designs are compared despite OP_VAULT being deprecated — the architectural comparison remains valuable for understanding design tradeoffs.
+
+### [CTV-CSFS25] "CTV+CSFS: Can we reach consensus on a first step towards covenants?"
+Delving Bitcoin discussion thread, 2025.
+URL: https://delvingbitcoin.org/t/ctv-csfs-can-we-reach-consensus-on-a-first-step-towards-covenants/1509
+
+Community discussion on bundling CTV (BIP-119) and CSFS (BIP-348) as a concrete soft-fork proposal. Relevant context for why the CTV and CAT+CSFS designs are compared alongside CCV.
+
+### [Ing25a] Ingala — "OP_CHECKCONTRACTVERIFY and its amount semantic"
+Salvatore Ingala. "OP_CHECKCONTRACTVERIFY and its amount semantic." Delving Bitcoin, 2025.
+URL: https://delvingbitcoin.org/t/op-checkcontractverify-and-its-amount-semantic/1527
+
+Discusses CCV amount handling modes, directly relevant to the DEDUCT accounting footgun demonstrated in experiment E (multi_input).
+
+### [BSSL25] B-SSL — "Covenant-Free Vault Model"
+"Concept Review: B-SSL (Bitcoin Secure Signing Layer) — Covenant-Free Vault Model Using Taproot, CSV, and CLTV." Delving Bitcoin, October 2025.
+URL: https://delvingbitcoin.org/t/concept-review-b-ssl-bitcoin-secure-signing-layer-covenant-free-vault-model-using-taproot-csv-and-cltv/2047
+
+A Taproot-based vault design without covenants, using only existing opcodes (CSV, CLTV) with multi-path spending conditions. Relevant as a baseline comparison point for what is achievable without new opcodes. Our framework focuses on covenant-based designs that provide stronger guarantees (e.g., destination locking, amount-aware withdrawal) not achievable with CSV/CLTV alone.
+
+### [covenants.info] Community Covenant Comparison
+covenants.info — community-maintained feature comparison matrix for Bitcoin covenant proposals.
+URL: https://covenants.info/
+
+Qualitative feature-matrix comparison. Our work differs by providing quantitative empirical measurements under controlled conditions rather than feature checklists.
 
 ---
 
@@ -89,29 +129,29 @@ Address reuse risk in CTV is discussed in the [BIP-119](https://bips.dev/119/) m
 
 Descendant-chain pinning is extensively discussed in [Bitcoin Optech](https://bitcoinops.org/en/newsletters/) and the Bitcoin Core PR discussions around v3/TRUC transactions ([#28948](https://github.com/bitcoin/bitcoin/pull/28948), [#29496](https://github.com/bitcoin/bitcoin/pull/29496)). Its application to CTV vault anchor outputs is noted in [BIP-119](https://bips.dev/119/) discussion. This experiment constructs an actual 24-descendant chain from a CTV vault's tocold anchor output on regtest, demonstrates that the descendant limit blocks CPFP on all outputs of the pinned transaction (not only the anchor), and provides a parameterized cost model across fee environments. Zhao's TRUC proposal would eliminate this attack vector if adopted.
 
-### D. recovery_griefing
+### D. revault_amplification
 
-Keyless recovery griefing is identified by Ingala ([Ing23](https://bips.dev/443/), bitcoin-dev mailing list) as an inherent property of CCV's permissionless recovery design. The vault custody threat model follows Swambo et al. [SHMB20](https://arxiv.org/abs/2005.11776). This experiment measures the vsize asymmetry between trigger (154 vB) and recovery (122 vB) transactions, simulates a 10-round griefing loop, and compares the CCV griefing surface (keyless, wider, liveness-only) with the CTV analog (hot-key sweep, narrower, escalates to fund theft via fee pinning).
+CCV's partial withdrawal capability (trigger_and_revault) is a core feature of [BIP-443](https://bips.dev/443/); CTV's all-or-nothing unvault is inherent to [BIP-119](https://bips.dev/119/). This experiment measures the cumulative vsize cost of N sequential partial withdrawals on CCV.
 
 ### E. multi_input
 
 CTV's inability to batch triggers follows from [BIP-119](https://bips.dev/119/)'s commitment to input count and spend index. CCV batching and the cross-input DEDUCT accounting footgun are documented by Ingala ([BIP-443](https://bips.dev/443/)). This experiment measures the vsize scaling curve for CCV batched triggers (marginal weight per vault, projected ceiling at ~1,600 vaults per standard transaction) and demonstrates the cross-input DEDUCT accounting failure on regtest.
 
-### F. revault_amplification
+### F. recovery_griefing
 
-CCV's partial withdrawal capability (trigger_and_revault) is a core feature of [BIP-443](https://bips.dev/443/); CTV's all-or-nothing unvault is inherent to [BIP-119](https://bips.dev/119/). This experiment measures the cumulative vsize cost of N sequential partial withdrawals on CCV.
+Keyless recovery griefing is identified by Ingala ([Ing23](https://bips.dev/443/), bitcoin-dev mailing list) as an inherent property of CCV's permissionless recovery design. The vault custody threat model follows Swambo et al. [SHMB20](https://arxiv.org/abs/2005.11776). This experiment measures the vsize asymmetry between trigger (154 vB) and recovery (122 vB) transactions, simulates a 10-round griefing loop, and compares the CCV griefing surface (keyless, wider, liveness-only) with the CTV analog (hot-key sweep, narrower, escalates to fund theft via fee pinning).
 
 ### G. ccv_edge_cases
 
-The OP_SUCCESS semantics for undefined CCV flags are a deliberate consensus design choice for forward compatibility, specified in [BIP-443](https://bips.dev/443/). Mode confusion risk is discussed by Ingala ([Ing23](https://gnusha.org/pi/bitcoindev/CAMhCMoFYF+9NL1sqKfn=ma3C_mfQv7mj2fqbqO5WXVwd6vyhLw@mail.gmail.com/)). Keypath bypass is inherent to Taproot (BIP-341), not CCV-specific. This experiment constructs P2TR outputs with undefined CCV flag bytes (4, 7, 128, 255), funds them on regtest, and confirms spends succeed unconditionally via OP_SUCCESS. See also experiment M (ccv_mode_bypass) for the production-vault escalation.
-
-### M. ccv_mode_bypass
-
-Escalates the synthetic mode-confusion finding from experiment G to production-shaped vault taptrees. Constructs a `VulnerableVault` with the same taptree structure as pymatt's production `Vault` (trigger + recover leaves), but the recover leaf's CCV uses an undefined mode value. Demonstrates the CCVWildSpend transition model: vault UTXO → zero typed outputs → funds into attacker-controlled UTXOs. Systematic mode sweep across 5 undefined values (3, 4, 7, 128, 255) confirms all produce complete covenant bypass. Prior art: Ingala [Ing23] documented OP_SUCCESS as a design decision for soft-fork safety; our contribution is the production-vault escalation and systematic measurement. Status: Verified via regtest measurement (2026-02-22).
+The OP_SUCCESS semantics for undefined CCV flags are a deliberate consensus design choice for forward compatibility, specified in [BIP-443](https://bips.dev/443/). Mode confusion risk is discussed by Ingala ([Ing23](https://gnusha.org/pi/bitcoindev/CAMhCMoFYF+9NL1sqKfn=ma3C_mfQv7mj2fqbqO5WXVwd6vyhLw@mail.gmail.com/)). Keypath bypass is inherent to Taproot (BIP-341), not CCV-specific. This experiment constructs P2TR outputs with undefined CCV flag bytes (4, 7, 128, 255), funds them on regtest, and confirms spends succeed unconditionally via OP_SUCCESS. See also experiment I (ccv_mode_bypass) for the production-vault escalation.
 
 ### H. watchtower_exhaustion
 
 The revault splitting attack originates with halseth in the OP_VAULT discussion, with quantitative estimates by Harding [Har24](https://delvingbitcoin.org/t/op-vault-comments/521) (~3,000 chunks per block, ~0.3 BTC watchtower reserve). CTV's immunity to this attack (all-or-nothing unvault) is noted in [OS23](https://bips.dev/345/). This experiment empirically tests Harding's estimates against measured CCV transaction sizes, extends the analysis with variable withdrawal fractions (dust through 50% of balance), quantifies batched recovery savings (~45% at 100 inputs), and identifies the fee-dependent crossover at which the attack shifts from infeasible to viable.
+
+### I. ccv_mode_bypass
+
+Escalates the synthetic mode-confusion finding from experiment G to production-shaped vault taptrees. Constructs a `VulnerableVault` with the same taptree structure as pymatt's production `Vault` (trigger + recover leaves), but the recover leaf's CCV uses an undefined mode value. Demonstrates the CCVWildSpend transition model: vault UTXO → zero typed outputs → funds into attacker-controlled UTXOs. Systematic mode sweep across 5 undefined values (3, 4, 7, 128, 255) confirms all produce complete covenant bypass. Prior art: Ingala [Ing23] documented OP_SUCCESS as a design decision for soft-fork safety; our contribution is the production-vault escalation and systematic measurement. Status: Verified via regtest measurement (2026-02-22).
 
 ### J. fee_sensitivity
 
@@ -125,19 +165,19 @@ The authorized recovery mechanism is specified in [BIP-345](https://bips.dev/345
 
 Trigger key compromise is the standard adversary model for vault security, analyzed in [SHMB20] and [OS23]. OP_VAULT-specific aspects: the xpub-derived trigger key hierarchy ([BIP-345](https://bips.dev/345/) §Key management), CTV-locked trigger output (shared with CTV), and three-key separation (trigger, recoveryauth, recovery). The dual-key compromise analysis (trigger + recoveryauth = persistent liveness denial, NOT theft) follows from the pre-committed recovery address design in BIP-345 — recovery always sends to the address fixed at vault creation. This is structurally less severe than CTV's hot+fee dual-key compromise (which enables actual fund theft via fee-pinning bypass).
 
-### N. cat_csfs_hot_key_theft
+### M. cat_csfs_hot_key_theft
 
-Hot key compromise in the CAT+CSFS vault is structurally similar to CTV's: the hot key can trigger unvaults and complete withdrawals, but only to the pre-committed destination (embedded as sha_single_output in the script). The dual-verification pattern (CSFS + CHECKSIG) was proposed by Poelstra [Poe21] and formalized by Ruffing/Poelstra [RP24]. The sighash preimage splitting technique used in the experiment follows from BIP-342 (Tapscript) sighash structure.
+Hot key compromise in the CAT+CSFS vault is structurally similar to CTV's: the hot key can trigger unvaults and complete withdrawals, but only to the pre-committed destination (embedded as sha_single_output in the script). The dual-verification pattern (CSFS + CHECKSIG) was proposed by Poelstra [Poe21] and formalized by Ruffing/Poelstra [RP24]. The sighash preimage splitting technique used in the experiment follows from BIP-342 (Tapscript) sighash structure. Rijndael's purrfect_vault [Rij24] demonstrates that OP_CAT alone (without CSFS) can achieve similar introspection via the Schnorr G-trick; our vault uses real CSFS for a simpler witness structure.
 
-### O. cat_csfs_witness_manipulation
+### N. cat_csfs_witness_manipulation
 
-Tests witness-level attacks against the CAT+CSFS introspection mechanism: prefix/suffix tampering, sha_single_output substitution, and signature reuse across different transaction contexts. The dual-verification constraint (CSFS against stack-assembled preimage + CHECKSIG against real sighash) is the core defense. Prior art: Poelstra [Poe21] describes the general introspection-via-signature-verification technique; this experiment stress-tests its robustness.
+Tests witness-level attacks against the CAT+CSFS introspection mechanism: prefix/suffix tampering, sha_single_output substitution, and signature reuse across different transaction contexts. The dual-verification constraint (CSFS against stack-assembled preimage + CHECKSIG against real sighash) is the core defense. Prior art: Poelstra [Poe21] describes the general introspection-via-signature-verification technique; Rijndael [Rij24] demonstrates the approach in a working vault prototype using the Schnorr G-trick (without CSFS). This experiment stress-tests robustness of the CSFS variant.
 
-### P. cat_csfs_destination_lock
+### O. cat_csfs_destination_lock
 
 The fixed-destination property of our CAT+CSFS vault (sha_single_output embedded at creation time) contrasts with Poelstra's [Poe21] dynamic destination design (destination encoded in a second output at trigger time) and with CCV/OP_VAULT (destination chosen at trigger time). Phase 4 includes a design comparison noting Poelstra's alternative and the security tradeoff: fixed destination = smaller hot-key attack surface; dynamic destination = operational flexibility at the cost of hot-key redirection risk.
 
-### Q. cat_csfs_cold_key_recovery
+### P. cat_csfs_cold_key_recovery
 
 The unconstrained cold-key recovery (bare OP_CHECKSIG) is the simplest possible recovery mechanism but also the weakest. Phase 5 models the alternative design from Poelstra [Poe21]: recursive staging resets where cold key compromise leads to a liveness battle rather than immediate theft. Cost projections compare per-round battle expenses (owner trigger + attacker reset) across fee environments. The Poelstra reset model would upgrade CAT+CSFS recovery security from rank #4 (immediate theft) to rank #2 (liveness denial, matching OP_VAULT).
 
@@ -165,4 +205,6 @@ This work provides an empirical comparison framework for CTV ([BIP-119](https://
 
 3. The inverse-ranking structural result — griefing resistance and fund safety under key loss are necessarily anti-correlated across designs (OP_VAULT > CTV > CCV for griefing resistance; CCV > CTV > OP_VAULT for key-loss safety). This is a necessary tradeoff, not an implementation artifact.
 
-4. Empirical confirmation/correction of prior estimates — Harding's [Har24] ~3,000 chunks/block estimate confirmed (measured: 3,427). OP_VAULT hand-estimated vsizes corrected (trigger: 200→292, recovery: 170→246). Parameterized economic models extending [Har24] with variable withdrawal fractions, batched recovery quantification, and spend-delay sensitivity.
+4. Empirical confirmation/correction of prior estimates — For OP_VAULT, we measure 3,427 splits/block (trigger_and_revault weight ~1,168 WU), consistent with Harding's [Har24] ~3,000 estimate. For CCV, the smaller trigger_and_revault transaction (162 vB vs OP_VAULT's 292 vB) yields approximately 6,172 splits/block — roughly 80% more than OP_VAULT, because Harding's analysis assumed OP_VAULT-sized transactions. OP_VAULT hand-estimated vsizes corrected (trigger: 200→292, recovery: 170→246). Parameterized economic models extending [Har24] with variable withdrawal fractions, batched recovery quantification, and spend-delay sensitivity.
+
+5. OP_VAULT deprecation context — BIP-345 was withdrawn [OB25] in favor of CCV (BIP-443). Our comparison quantifies the economic justification: OP_VAULT's fee-input overhead costs 36% more per lifecycle than CCV, and 80-90 vB more per non-deposit transaction.

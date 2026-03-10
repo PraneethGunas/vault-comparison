@@ -163,15 +163,15 @@ The framework includes 16 experiments organized by scope category.
 | A | `lifecycle_costs` | CTV, CCV, OPV, CAT | Comparative | Full vault lifecycle transaction sizes and fees |
 | B | `address_reuse` | CTV, CCV, OPV, CAT | Comparative | Second-deposit safety: stuck funds (CTV) vs safe re-funding (CCV, OPV, CAT) |
 | C | `fee_pinning` | CTV, CCV, OPV, CAT | Comparative | Fee mechanism and descendant-chain pinning surface |
-| D | `recovery_griefing` | CTV, CCV, OPV, CAT | Comparative | Forced-recovery griefing: four-way asymmetric cost analysis |
-| E | `revault_amplification` | CCV, OPV | Capability gap | Partial withdrawal chaining and cost accumulation |
-| F | `multi_input` | CTV, CCV, OPV, CAT | Capability gap | Batched trigger efficiency and cross-input accounting |
+| D | `revault_amplification` | CCV, OPV | Capability gap | Partial withdrawal chaining and cost accumulation |
+| E | `multi_input` | CTV, CCV, OPV, CAT | Capability gap | Batched trigger efficiency and cross-input accounting |
+| F | `recovery_griefing` | CTV, CCV, OPV, CAT | Comparative | Forced-recovery griefing: four-way asymmetric cost analysis |
 | G | `ccv_edge_cases` | CCV | CCV-only | Mode confusion, keypath bypass, sentinel values |
 | H | `watchtower_exhaustion` | CCV, OPV | Security | Revault-splitting watchtower fee exhaustion attack |
-| I | `fee_sensitivity` | All (analytical) | Analytical | Four-way fee environment sensitivity projections |
-| J | `opvault_recovery_auth` | OPV | OP_VAULT-specific | Authorized recovery as defense and attack surface |
-| K | `opvault_trigger_key_theft` | OPV | OP_VAULT-specific | Trigger key theft: attacker vs watchtower recovery race |
-| L | `ccv_mode_bypass` | CCV | CCV-only | Production-shaped vault UTXO theft via OP_SUCCESS on undefined CCV modes |
+| I | `ccv_mode_bypass` | CCV | CCV-only | Production-shaped vault UTXO theft via OP_SUCCESS on undefined CCV modes |
+| J | `fee_sensitivity` | All (analytical) | Analytical | Four-way fee environment sensitivity projections |
+| K | `opvault_recovery_auth` | OPV | OP_VAULT-specific | Authorized recovery as defense and attack surface |
+| L | `opvault_trigger_key_theft` | OPV | OP_VAULT-specific | Trigger key theft: attacker vs watchtower recovery race |
 | M | `cat_csfs_hot_key_theft` | CAT | CAT+CSFS-only | Hot key compromise: griefing-only, no theft path |
 | N | `cat_csfs_witness_manipulation` | CAT | CAT+CSFS-only | Witness tampering against OP_CAT+CSFS introspection |
 | O | `cat_csfs_destination_lock` | CAT | CAT+CSFS-only | Destination address locking via embedded commitments |
