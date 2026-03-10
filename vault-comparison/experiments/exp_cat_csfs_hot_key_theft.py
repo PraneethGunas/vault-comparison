@@ -10,8 +10,11 @@ signature to the embedded output hash.
 === RELATED WORK ===
 The dual-verification pattern (CSFS + CHECKSIG with same signature)
 was proposed by Poelstra ("CAT and Schnorr Tricks", 2021) and refined
-by Ruffing/Poelstra (BIP 348).  The sighash preimage splitting
-technique is described in the Bitcoin Wiki taproot BIP 342 section.
+by Ruffing/Poelstra (BIP 348).  Rijndael [Rij24] demonstrated a
+working OP_CAT-only vault (purrfect_vault) using the Schnorr G-trick
+instead of CSFS; our vault uses real CSFS for a simpler witness.
+The sighash preimage splitting technique is described in the Bitcoin
+Wiki taproot BIP 342 section.
 
 The SIGHASH_SINGLE|ANYONECANPAY model for fee flexibility is used in
 Lightning Network anchor outputs (BOLT 3) and analyzed in "One Single
@@ -88,8 +91,9 @@ def run(adapter: VaultAdapter) -> ExperimentResult:
 
     rpc = adapter.rpc
 
+    measured_trigger_vsize = 200  # fallback
     try:
-        _run_hot_key_theft(adapter, result, rpc)
+        measured_trigger_vsize = _run_hot_key_theft(adapter, result, rpc)
     except Exception as e:
         result.error = str(e)
         result.observe(f"FAILED: {e}")
@@ -111,9 +115,9 @@ def run(adapter: VaultAdapter) -> ExperimentResult:
         result,
         threat_model_name="Hot key theft (CAT+CSFS)",
         vsize_rows=[
-            {"label": "trigger_tx", "vsize": 200,
-             "description": "Hot key trigger to vault-loop (covenant-enforced)"},
-            {"label": "griefing_trigger", "vsize": 200,
+            {"label": "trigger_tx", "vsize": measured_trigger_vsize,
+             "description": "Hot key trigger to vault-loop (measured)"},
+            {"label": "griefing_trigger", "vsize": measured_trigger_vsize,
              "description": "Repeated trigger for griefing (same cost)"},
         ],
         vault_amount_sats=VAULT_AMOUNT,
@@ -384,3 +388,5 @@ def _run_hot_key_theft(adapter, result, rpc):
     result.observe(
         "    3. CAT+CSFS (hot key CANNOT choose destination, griefing only)"
     )
+
+    return trigger_vsize

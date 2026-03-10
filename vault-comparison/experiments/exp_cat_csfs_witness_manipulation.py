@@ -35,6 +35,12 @@ Impossibility argument: The attacker must find values P' and S' such that
   real sha_single_output (different from embedded).  Finding a collision
   in SHA256 is computationally infeasible.
 
+=== RELATED WORK ===
+Poelstra [Poe21] describes the general introspection-via-signature-verification
+technique.  Rijndael [Rij24] demonstrated a working OP_CAT-only vault
+(purrfect_vault) using the Schnorr G-trick instead of CSFS.  This experiment
+stress-tests the robustness of the CSFS variant's dual-verification pattern.
+
 === EMPIRICAL DEMONSTRATION ===
 Phase 1: Correct witness — verify the normal case works.
 Phase 2: Tampered prefix — modify nVersion in the prefix.  Expected:
@@ -269,6 +275,31 @@ def _run_witness_manipulation(adapter, result):
     result.observe(
         "The 520-byte stack limit is comfortably satisfied for "
         "SIGHASH_SINGLE|ANYONECANPAY preimages, with significant headroom."
+    )
+    result.observe(
+        "SECURITY BOUNDARY NOTE: The 520-byte OP_CAT limit (consensus rule) "
+        "is itself a security parameter for CAT-based covenant designs.  "
+        "If this limit were removed (as some proposals suggest for enabling "
+        "more expressive covenants), the attack surface changes: larger "
+        "preimages could encode more complex transaction structures, "
+        "potentially enabling covenant patterns not currently possible.  "
+        "Conversely, the 520-byte limit constrains the complexity of "
+        "introspectable transaction fields, bounding the witness overhead "
+        "and implicitly limiting the expressiveness of CAT+CSFS covenants "
+        "relative to native-opcode approaches (CCV, OP_VAULT).  This "
+        "connects to active Bitcoin research on OP_CAT activation scope."
+    )
+    result.observe(
+        "PRIOR ART: The dual-verification technique (CSFS verifies a "
+        "stack-assembled sighash preimage; CHECKSIG independently verifies "
+        "against the real transaction sighash) was proposed by Poelstra "
+        "[Poe21] ('CAT and Schnorr Tricks I/II', Blockstream Research Blog, "
+        "2021) using a CAT-only Schnorr discrete-log trick.  Ruffing and "
+        "Poelstra [RP24] formalized OP_CHECKSIGFROMSTACK (BIP-348) for "
+        "Tapscript, enabling the explicit CSFS variant used here.  Our "
+        "contribution is empirical stress-testing of the tamper resistance "
+        "property — the three manipulation vectors tested here (prefix, "
+        "suffix, hash_type substitution) have no prior empirical analogs."
     )
 
 

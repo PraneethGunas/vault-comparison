@@ -431,40 +431,57 @@ def _run_cold_key_recovery(adapter, result):
         "only delay the owner indefinitely."
     )
 
-    # Cost model using measured vsizes from this experiment
+    # Cost model using measured vsizes from this experiment and exp_fee_sensitivity
     #
     # Our vault's measured vsizes:
-    #   trigger_vsize: ~200 vB (from lifecycle experiments)
+    #   trigger_vsize: 221 vB (from exp_fee_sensitivity / lifecycle measurements)
     #   recover_vsize: measured above in Phase 1
     #
+    # We import the verified structural constant rather than hand-estimating.
+    # If the import fails (e.g., running standalone), fall back to the known value.
+    try:
+        from experiments.exp_fee_sensitivity import CATCSFS_TRIGGER_VSIZE
+        measured_trigger_vsize = CATCSFS_TRIGGER_VSIZE
+    except ImportError:
+        measured_trigger_vsize = 221  # verified constant from lifecycle measurements
+
     # Poelstra's reset would use a CAT+CSFS introspection script similar
     # to the trigger leaf (not the bare OP_CHECKSIG we have), so we
     # estimate the reset vsize as comparable to the trigger vsize.
     # This is a LOWER BOUND — Poelstra's design is CAT-only (no CSFS),
     # which may be slightly larger due to the G-as-pubkey Schnorr trick.
-
-    estimated_trigger_vsize = 200  # approximate from lifecycle measurements
-    # Poelstra reset ≈ CAT+CSFS trigger (introspection + cold key sig)
-    estimated_reset_vsize = estimated_trigger_vsize + 15  # slightly larger: cold key path
+    # The +15 vB accounts for: cold key signature (32B Schnorr) is the same
+    # size as the hot key signature already in the trigger, but the reset
+    # script adds a recursive-covenant output check (~15 vB additional
+    # script weight for the OP_CAT-assembled output commitment).  This is
+    # an ESTIMATE with ~±10 vB uncertainty — Poelstra's exact script has
+    # not been implemented.
+    estimated_reset_vsize = measured_trigger_vsize + 15  # trigger + recursive covenant overhead
     our_recover_vsize = recover_vsize  # measured in Phase 1
 
     result.observe("")
     result.observe("COST MODEL COMPARISON: Our design vs Poelstra-style reset")
-    result.observe(f"  Our recover vsize (bare OP_CHECKSIG): {our_recover_vsize} vB")
-    result.observe(f"  Our trigger vsize (CAT+CSFS introspection): ~{estimated_trigger_vsize} vB")
-    result.observe(f"  Poelstra reset vsize (estimated, CAT introspection + cold key): ~{estimated_reset_vsize} vB")
+    result.observe(f"  Our recover vsize (bare OP_CHECKSIG): {our_recover_vsize} vB (measured, Phase 1)")
+    result.observe(f"  Our trigger vsize (CAT+CSFS introspection): {measured_trigger_vsize} vB (measured, exp_fee_sensitivity)")
+    result.observe(f"  Poelstra reset vsize (ESTIMATED, CAT introspection + cold key): ~{estimated_reset_vsize} vB (±10 vB)")
+    result.observe(
+        "  NOTE: The reset vsize is estimated as trigger + 15 vB for the "
+        "recursive covenant output check.  Poelstra's exact script has not "
+        "been implemented; the ±10 vB uncertainty bound reflects possible "
+        "variation in the CAT-only (vs CAT+CSFS) witness encoding."
+    )
     result.observe("")
 
     # Model N rounds of the liveness battle
     max_battle_rounds = 10
     result.observe(f"LIVENESS BATTLE: {max_battle_rounds}-round cost projection")
-    result.observe(f"  Each round: owner pays trigger (~{estimated_trigger_vsize} vB) + "
-                   f"attacker pays reset (~{estimated_reset_vsize} vB)")
+    result.observe(f"  Each round: owner pays trigger ({measured_trigger_vsize} vB, measured) + "
+                   f"attacker pays reset (~{estimated_reset_vsize} vB, estimated ±10 vB)")
     result.observe("")
 
     for fee_rate in [1, 10, 50, 100]:
         result.observe(f"  At {fee_rate} sat/vB:")
-        owner_per_round = estimated_trigger_vsize * fee_rate
+        owner_per_round = measured_trigger_vsize * fee_rate
         attacker_per_round = estimated_reset_vsize * fee_rate
         for n in [1, 5, max_battle_rounds]:
             owner_total = owner_per_round * n
@@ -481,7 +498,7 @@ def _run_cold_key_recovery(adapter, result):
     result.observe("BATTLE TERMINATION CONDITIONS:")
     result.observe(
         "  1. Fee exhaustion: combined fees drain the vault value.  At 10 sat/vB, "
-        f"a {VAULT_AMOUNT:,}-sat vault survives ~{VAULT_AMOUNT // ((estimated_trigger_vsize + estimated_reset_vsize) * 10):,} rounds."
+        f"a {VAULT_AMOUNT:,}-sat vault survives ~{VAULT_AMOUNT // ((measured_trigger_vsize + estimated_reset_vsize) * 10):,} rounds."
     )
     result.observe(
         "  2. Attacker abandonment: attacker gives up (no financial gain, "

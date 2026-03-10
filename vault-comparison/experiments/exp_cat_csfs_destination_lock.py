@@ -77,8 +77,10 @@ def run(adapter: VaultAdapter) -> ExperimentResult:
         result.observe("Skipping — CAT+CSFS-specific experiment.")
         return result
 
+    measured_recover_vsize = 130  # fallback
+    measured_tovault_vsize = 122  # fallback (not directly measured in this experiment)
     try:
-        _run_destination_lock(adapter, result)
+        measured_recover_vsize = _run_destination_lock(adapter, result)
     except Exception as e:
         result.error = str(e)
         result.observe(f"FAILED: {e}")
@@ -98,10 +100,10 @@ def run(adapter: VaultAdapter) -> ExperimentResult:
         result,
         threat_model_name="Destination rotation (recovery + re-vault)",
         vsize_rows=[
-            {"label": "recovery_tx", "vsize": 130,
-             "description": "Cold key recovery from vault-loop"},
-            {"label": "new_tovault_tx", "vsize": 122,
-             "description": "New vault deposit with updated destination"},
+            {"label": "recovery_tx", "vsize": measured_recover_vsize,
+             "description": "Cold key recovery from vault-loop (measured)"},
+            {"label": "new_tovault_tx", "vsize": measured_tovault_vsize,
+             "description": "New vault deposit with updated destination (estimated)"},
         ],
         vault_amount_sats=VAULT_AMOUNT,
     )
@@ -414,3 +416,5 @@ def _run_destination_lock(adapter, result):
         "destination is the more conservative choice; Poelstra's is the more "
         "operationally flexible one."
     )
+
+    return recover_vsize
