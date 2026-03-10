@@ -1,4 +1,4 @@
-"""Experiment I: Watchtower Exhaustion via Revault Splitting
+"""Experiment H: Watchtower Exhaustion via Revault Splitting
 
 Demonstrates the revault splitting attack originating with halseth in
 the OP_VAULT discussion (BIP-345, https://bips.dev/345/), with

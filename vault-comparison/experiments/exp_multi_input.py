@@ -1,4 +1,4 @@
-"""Experiment F: Multi-Input Batching
+"""Experiment E: Multi-Input Batching
 
 Tests batched trigger capabilities — spending multiple vault UTXOs in a
 single transaction — and measures the efficiency gains (or impossibility).

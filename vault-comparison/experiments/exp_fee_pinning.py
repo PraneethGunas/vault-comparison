@@ -1,4 +1,4 @@
-"""Experiment D: Fee Management and Pinning Resistance
+"""Experiment C: Fee Management and Pinning Resistance
 
 Compares how each vault design handles transaction fees and resistance
 to fee-related attacks (descendant chain pinning).

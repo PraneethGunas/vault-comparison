@@ -1,4 +1,4 @@
-"""Experiment E: Revault Amplification
+"""Experiment D: Revault Amplification
 
 Tests partial-withdrawal (revault) capabilities and measures amplification
 effects — how many sequential partial spends can be chained from a single
