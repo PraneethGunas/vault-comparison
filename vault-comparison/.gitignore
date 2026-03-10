@@ -20,6 +20,8 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Keep results directory but ignore large binary outputs
+# Keep results directory but ignore timestamped run outputs
 results/*
 !results/.gitkeep
+!results/reference/
+!results/reference/CHECKSUMS.md
